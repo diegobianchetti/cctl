@@ -1,0 +1,47 @@
+## Rejection email message
+##
+## {0}  Title of submission
+## {1}  Name of collection
+## {2}  Name of the rejector
+## {3}  Reason for the rejection
+## {4}  Link to 'My DSpace' page
+##
+#set($subject = "${config.get('dspace.name')}: Submission Rejected")
+
+#You submitted: ${params[0]}
+
+#To collection: ${params[1]}
+
+#Your submission has been rejected by ${params[2]}
+#with the following explanation:
+
+#${params[3]}
+
+#Your submission has not been deleted. You can access it from your "My${config.get('dspace.shortname')}" page: ${params[4]}
+
+#The ${config.get('dspace.name')} Team
+#
+#
+## Mensagem de e-mail de Rejeição
+##
+## {0}  Título da submissão
+## {1}  Nome da coleção
+## {2}  Nome do rejeitador
+## {3}  Motivo da rejeição
+## {4}  Link para a página 'Meu DSpace'
+##
+#set($subject = "${config.get('dspace.name')}: Submissão Rejeitada")
+
+Você submeteu: ${params[0]}
+
+Para a coleção: ${params[1]}
+
+Sua submissão foi rejeitada por ${params[2]}
+com a seguinte explicação:
+
+${params[3]}
+
+Sua submissão não foi deletada. Você pode acessá-la a partir da sua página "Meu ${config.get('dspace.shortname')}": ${params[4]}
+
+Equipe do ${config.get('dspace.name')}
+

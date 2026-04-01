@@ -1,0 +1,21 @@
+## E-mail sent by the healthcheck command to whomever is mentioned as -e parameter.
+##
+## Parameters: {0} is the output of healthcheck command
+## See org.dspace.core.Email for information on the format of this file.
+##
+#set($subject = "${config.get('dspace.name')}: Repository healthcheck")
+#The healthcheck finished with the following output:
+
+#${params[0]}
+#
+###
+## E-mail enviado pelo comando healthcheck para o endereço mencionado no parâmetro -e.
+##
+## Parâmetros: {0} é a saída do comando healthcheck
+## Consulte org.dspace.core.Email para informações sobre o formato deste arquivo.
+##
+#set($subject = "${config.get('dspace.name')}: Verificação de saúde do repositório")
+A verificação de saúde foi concluída com a seguinte saída:
+
+${params[0]}
+

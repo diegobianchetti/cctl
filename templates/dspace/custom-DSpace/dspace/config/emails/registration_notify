@@ -1,0 +1,42 @@
+## Registration notification email
+##
+## Parameters: {0} The name of the DSpace instance
+##             {1} The URL of the DSpace instance
+##             {2} Name:
+##             {3} Email:
+##             {4} Registration Date:
+##
+## See org.dspace.core.Email for information on the format of this file.
+##
+#set($subject = "${config.get('dspace.name')}: Registration Notification")
+
+#A new user has registered on ${params[0]} at ${params[1]}:
+#
+#Name:                   ${params[2]}
+#Email:                  ${params[3]}
+#Date:                   ${params[4]}
+#
+#The ${config.get('dspace.name')} Team
+#
+#
+#
+## E-mail de notificação de registro
+##
+## Parâmetros: {0} Nome da instância do DSpace
+##             {1} URL da instância do DSpace
+##             {2} Nome:
+##             {3} E-mail:
+##             {4} Data de registro:
+##
+## Consulte org.dspace.core.Email para informações sobre o formato deste arquivo.
+##
+#set($subject = "${config.get('dspace.name')}: Notificação de Registro")
+
+Um novo usuário se registrou em ${params[0]} no endereço ${params[1]}:
+
+Nome:                   ${params[2]}
+E-mail:                 ${params[3]}
+Data:                   ${params[4]}
+
+Equipe do ${config.get('dspace.name')}
+

@@ -1,0 +1,25 @@
+{
+  "apps": [
+    {
+      "name": "dspace-ui",
+      "cwd": "/app",
+      "script": "dist/server/main.js",
+      "instances": "2",
+      "exec_mode": "cluster",
+      "env": {
+        "NODE_ENV": "production"
+      },
+      "max_memory_restart": "500M",
+      "out_file": "/app/logs/application.log",
+      "error_file": "/app/logs/error.log",
+      "log_type": "json",
+      "merge_logs": true,
+      "log_date_format": "YYYY-MM-DD HH:mm:ss",
+      "time": true,
+      "max_size": "30M",
+      "retain": "7",
+      "disable_logs": false,
+      "opts": "--output /dev/null --error /dev/null"
+    }
+  ]
+}

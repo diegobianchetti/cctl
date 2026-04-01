@@ -1,0 +1,346 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE item-submission SYSTEM "item-submission.dtd">
+
+<!-- Configurable Submission configuration file -->
+
+<!-- This XML configuration file allows you to configure the ordering -->
+<!-- and number of the steps that occur in the Item Submission Process. -->
+<item-submission>
+
+    <!-- The process-map maps collection handles to a particular Item -->
+    <!-- Submission Process. This requires that a collection's name be -->
+    <!-- unique, even within a community. DSpace does however ensure that each -->
+    <!-- collection's handle is unique. Process-map provides the means to -->
+    <!-- associate a unique collection name with an Item Submission process. -->
+    <!-- The process-map also provides the special handle "default" (which is -->
+    <!-- never a collection), here mapped to "traditional". Any collection -->
+    <!-- which does not appear in this map will be associated with the mapping -->
+    <!-- for handle "default". -->
+    <submission-map>
+    <!-- ========================= -->
+    <!-- MAPEAMENTO POR COLEÇÃO -->
+    <!-- ========================= -->
+<!--
+<name-map collection-handle="123456789/1229" submission-name="capitulo"/>
+<name-map collection-handle="123456789/1230" submission-name="livro"/>
+<name-map collection-handle="123456789/36" submission-name="posgraduacao"/>
+<name-map collection-handle="123456789/37" submission-name="posgraduacao"/>
+<name-map collection-handle="123456789/915" submission-name="doutorado"/>
+<name-map collection-handle="123456789/31" submission-name="mestrado"/>
+<name-map collection-handle="123456789/32" submission-name="mestrado"/>
+<name-map collection-handle="123456789/33" submission-name="mestrado"/>
+<name-map collection-handle="123456789/34" submission-name="mestrado"/>
+<name-map collection-handle="123456789/1154" submission-name="memoria"/>
+<name-map collection-handle="123456789/1156" submission-name="memoria"/>
+<name-map collection-handle="123456789/1155" submission-name="memoria"/>
+<name-map collection-handle="123456789/1157" submission-name="memoria"/>
+<name-map collection-handle="123456789/1146" submission-name="boletim"/>
+<name-map collection-handle="123456789/1232" submission-name="boletim"/>
+<name-map collection-handle="123456789/3" submission-name="graduacao"/>
+<name-map collection-handle="123456789/4" submission-name="graduacao"/>
+<name-map collection-handle="123456789/5" submission-name="graduacao"/>
+<name-map collection-handle="123456789/6" submission-name="graduacao"/>
+<name-map collection-handle="123456789/8" submission-name="graduacao"/>
+<name-map collection-handle="123456789/9" submission-name="graduacao"/>
+<name-map collection-handle="123456789/10" submission-name="graduacao"/>
+<name-map collection-handle="123456789/11" submission-name="graduacao"/>
+<name-map collection-handle="123456789/12" submission-name="graduacao"/>
+<name-map collection-handle="123456789/13" submission-name="graduacao"/> 
+<name-map collection-handle="123456789/14" submission-name="graduacao"/>
+<name-map collection-handle="123456789/18" submission-name="graduacao"/>
+<name-map collection-handle="123456789/21" submission-name="graduacao"/>
+<name-map collection-handle="123456789/22" submission-name="graduacao"/>
+<name-map collection-handle="123456789/24" submission-name="graduacao"/>
+<name-map collection-handle="123456789/25" submission-name="graduacao"/>
+<name-map collection-handle="123456789/26" submission-name="graduacao"/>
+-->
+
+<name-map collection-handle="default" submission-name="traditional"/>
+        
+
+</submission-map>
+
+
+
+    <!-- The 'step-definitions' allows you to define steps which you may wish -->
+    <!-- to "share" amongst multiple submission-item definitions. In order to -->
+    <!-- share the same step definition, you can refer to it by its unique id -->
+    <!-- defined in this section. EVERY 'step' in this section MUST have a -->
+    <!-- unique identifier in the 'id' attribute! -->
+    <!-- -->
+    <!-- Each <step-definition> REQUIRES the following attributes (@) and properties: -->
+    <!-- @id - The unique identifier for this step -->
+    <!-- -->
+    <!-- <processing-class> - The class which will process all information for -->
+    <!-- this step. The class must implement -->
+    <!-- 'org.dspace.app.rest.submit.RestProcessingStep' -->
+    <!-- (or one of the org.dspace.rest.submit.step.* classes) -->
+    <!-- This property should reference the full path of the class -->
+    <!-- (e.g. org.dspace.app.rest.submit.step.MyCustomStep) -->
+    <!-- -->
+    <!-- The following properties are OPTIONAL for each <step-definition>: -->
+    <!-- <heading> - References the message key, from the -->
+    <!-- Messages.properties -->
+    <!-- -->
+    <step-definitions>
+        <!-- The "collection" step is a "special step" which is *REQUIRED* -->
+        <!-- In DSpace, all submitted items must be immediately assigned -->
+        <!-- to a collection. This step ensures that a collection is always selected. -->
+        <step-definition id="collection">
+            <heading></heading>
+            <processing-class>org.dspace.app.rest.submit.step.CollectionStep</processing-class>
+            <type>collection</type>
+        </step-definition>
+
+        <!-- The following set of DescribeStep <step-definition>s all point to forms (of the same name) which are
+             defined in submission-forms.xml -->
+        <step-definition id="padrao" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+        <step-definition id="graduacaoStep" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+        <step-definition id="boletimStep" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+        <step-definition id="memoriaStep" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+        <step-definition id="mestradoStep" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+
+        <step-definition id="doutoradoStep" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+
+        <step-definition id="livroStep" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+
+        <step-definition id="posgraduacaoStep" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+        
+        <step-definition id="capituloStep" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+
+        <step-definition id="upload">
+            <heading>submit.progressbar.upload</heading>
+            <processing-class>org.dspace.app.rest.submit.step.UploadStep</processing-class>
+            <type>upload</type>
+        </step-definition>
+        <step-definition id="license">
+            <heading>submit.progressbar.license</heading>
+            <processing-class>org.dspace.app.rest.submit.step.LicenseStep</processing-class>
+            <type>license</type>
+            <scope visibilityOutside="read-only">submission</scope>
+            
+        </step-definition>
+
+        <!-- This optional step may allow the user to select a Creative Commons license -->
+        <step-definition id="cclicense" mandatory="true">
+            <heading>submit.progressbar.CClicense</heading>
+            <processing-class>org.dspace.app.rest.submit.step.CCLicenseStep</processing-class>
+	        <type>cclicense</type>
+        </step-definition>
+
+		<!-- This optional step may allow the user to select access conditions on the item -->
+        <step-definition id="itemAccessConditions">
+            <heading>submit.progressbar.accessCondition</heading>
+            <processing-class>org.dspace.app.rest.submit.step.AccessConditionStep</processing-class>
+            <type>accessCondition</type>
+        </step-definition>
+
+        <!-- This optional step may enrich the current submission using information extracted
+             from uploaded files or metadata.  -->
+        <!-- Please note that this step will be triggered only when a request is performed,
+             e.g. when a file is uploaded or the form is saved. The Angular UI also supports an
+             autosave feature based on a timer, or the input of specific metadata such as identifiers,
+             see the 'submission.autosave' settings in the 'environment.common.ts'.
+             See also 'config/spring/api/step-processing-listener.xml' for further server side configuration
+             -->
+        <step-definition id="extractionstep">
+            <heading>submit.progressbar.ExtractMetadataStep</heading>
+            <processing-class>org.dspace.app.rest.submit.step.ExtractMetadataStep</processing-class>
+            <type>extract</type>
+        </step-definition>
+
+        <!-- OpenAIRE submission steps/forms -->
+        <step-definition id="openAIREProjectForm" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+        <step-definition id="openAIREPersonForm" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+        <step-definition id="openAIREOrganizationForm" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+        <step-definition id="openAIREPublicationPageoneForm" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+        <step-definition id="openAIREPublicationPagetwoForm" mandatory="true">
+            <heading>submit.progressbar.describe.stepone</heading>
+            <processing-class>org.dspace.app.rest.submit.step.DescribeStep</processing-class>
+            <type>submission-form</type>
+        </step-definition>
+
+        <!-- This is the Sample/Fake Step which is used for testing only -->
+        <step-definition id="sample">
+            <heading>Sample</heading>
+            <processing-class>org.dspace.submit.step.SampleStep</processing-class>
+            <type>sample</type>
+        </step-definition>
+
+        <step-definition id="sherpaPolicies" mandatory="true">
+            <heading>submit.progressbar.sherpapolicy</heading>
+            <processing-class>org.dspace.app.rest.submit.step.SherpaPolicyStep</processing-class>
+            <type>sherpaPolicy</type>
+        </step-definition>
+
+        <!-- New step for show / mint identifiers -->
+        <step-definition id="identifiers">
+            <heading>submit.progressbar.identifiers</heading>
+            <processing-class>org.dspace.app.rest.submit.step.ShowIdentifiersStep</processing-class>
+            <type>identifiers</type>
+        </step-definition>
+    </step-definitions>
+
+    <!-- The submission-definitions map lays out the detailed definition of -->
+    <!-- all the Item Submission Processes (and the ordering of their steps). -->
+    <!-- Each separate "submission-process" has a unique name as an attribute, -->
+    <!-- which matches one of the names in the process-map. One named -->
+    <!-- "submit-process" has the name "traditional"; as this name suggests, -->
+    <!-- it is the default item submission process, which gets used when -->
+    <!-- the specified collection has no correspondingly named submit-process. -->
+    <!-- -->
+    <!-- Each submit-process contains an ordered set of steps; each step -->
+    <!-- defines one "step" occurring during the process of submitting an -->
+    <!-- item. A step MUST be referenced by 'id' (it must -->
+    <!-- be defined in <step-definitions> above). -->
+    <!-- -->
+    <!-- -->
+    <submission-definitions>
+
+        <!--This "traditional" process defines the DEFAULT item submission process -->
+        <submission-process name="traditional">
+            <!--Uncommment to display the SAMPLE step as your first step -->
+            <!--<step id="sample"/> -->
+
+            <step id="collection"/>
+            <!-- To include the 'Show Identifiers' step, uncomment the line below. Make sure
+                 that identifiers.cfg and identifier-service.xml are properly configured. -->
+            <!--<step id="identifiers"/>-->
+            <!--Step will be to Describe the item. -->
+            <step id="padrao"/>
+		<!-- <step id="traditionalpagetwo"/> comantado pela Jana-->
+
+            <!-- Uncomment this step to allow the user to embargo or access restrict the entire item -->
+            <!-- <step id="itemAccessConditions"/> -->
+
+            <!-- Uncomment this step to show when appropriate publisher policies retrieved from SHERPA/RoMEO -->
+            <!-- <step id="sherpaPolicies"/> -->
+
+            <!--Step will be to Upload the item -->
+            <step id="upload"/>
+
+            <!-- <step id="extractionstep"/> -->
+
+            <!-- Uncomment this step to allow the user to select a Creative Commons License -->
+		<!--<step id="cclicense"/>-->
+
+            <!--Step will be to Sign off on the required DSpace License agreement -->
+
+            
+		<!--<step id="license"/>-->
+        </submission-process>
+        <submission-process name="graduacao">
+    <step id="collection"/>
+    <step id="graduacaoStep"/>
+    <step id="upload"/>
+     </submission-process>
+
+     <submission-process name="boletim">
+    <step id="collection"/>
+    <step id="boletimStep"/>
+    <step id="upload"/>
+     </submission-process>
+
+     <submission-process name="memoria">
+    <step id="collection"/>
+    <step id="memoriaStep"/>
+    <step id="upload"/>
+     </submission-process>
+
+     <submission-process name="mestrado">
+    <step id="collection"/>
+    <step id="mestradoStep"/>
+    <step id="upload"/>
+     </submission-process>
+
+     <submission-process name="doutorado">
+    <step id="collection"/>
+    <step id="doutoradoStep"/>
+    <step id="upload"/>
+     </submission-process>
+
+     <submission-process name="posgraduacao">
+    <step id="collection"/>
+    <step id="posgraduacaoStep"/>
+    <step id="upload"/>
+     </submission-process>
+
+     <submission-process name="livro">
+    <step id="collection"/>
+    <step id="livroStep"/>
+    <step id="upload"/>
+     </submission-process>
+
+     <submission-process name="capitulo">
+    <step id="collection"/>
+    <step id="capituloStep"/>
+    <step id="upload"/>
+     </submission-process>
+     
+     
+     
+     
+
+        <!--
+        Submission Process for 'Publication' Entities.
+        These are not to be confused with default Items, as Publications may be linked with other Entities
+        (e.g. Person, JournalIssue, etc).
+        To enable: create a collection for Publications and add it to the <submission-map> tag linking to this process
+         -->
+         
+        
+    </submission-definitions>
+
+</item-submission>

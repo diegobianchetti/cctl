@@ -1,0 +1,46 @@
+#!/bin/bash
+
+#========================================================================
+#- containers-control (cctl)                                            #
+#- Orquestrador generico para ambientes Docker containerizados          #
+#-                                                                      #
+#-    script          cctl                                              #
+#-    version         0.1.0                                             #
+#-    author          Diego Bianchetti (diego_bianchetti@solis.com.br)  #
+#-    license         GNU General Public License v3                     #
+#-    enterprise      Solis - Solucoes Livres (www.solis.com.br)        #
+#-                                                                      #
+#=======================================================================#
+
+set -euo pipefail
+
+# Resolve o diretorio raiz do cctl (onde este script esta)
+CCTL_ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+export CCTL_ROOT
+
+# Bootstrap: carrega libs
+source "${CCTL_ROOT}/lib/core.sh"
+core_bootstrap
+
+# Parse argumentos globais
+CCTL_COMMAND=""
+CCTL_ARGS=()
+CCTL_VERBOSE="${CCTL_VERBOSE:-false}"
+core_parse_global_args "$@"
+
+# Detecta contexto
+core_detect_context
+
+# Verifica se o comando e valido para o contexto
+core_check_command_context "${CCTL_COMMAND}" || exit 1
+
+# Carrega manifest se disponivel
+core_load_manifest
+
+# Carrega .env se disponivel
+if [[ "${CCTL_CONTEXT}" == "instance" || "${CCTL_CONTEXT}" == "client_branch" ]]; then
+    env_load
+fi
+
+# Dispatch
+core_dispatch "${CCTL_COMMAND}" "${CCTL_ARGS[@]}"

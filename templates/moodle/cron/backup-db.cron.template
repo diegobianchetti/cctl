@@ -1,0 +1,4 @@
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+00 23 * * *     root    /usr/bin/docker compose -p {{COMPOSE_PROJECT_NAME}} exec moodle-db bash -c "/usr/local/bin/backup-banco-moodle.sh -b && /usr/local/bin/backup-banco-moodle.sh -r"

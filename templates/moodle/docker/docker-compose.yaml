@@ -1,0 +1,117 @@
+####################################
+## Docker-Compose: Moodle (Solis) ##
+####################################
+services:
+  moodle-db:
+    image: "${DOCKER_OWNER:-moodle-docker}/${MOODLE_DB_IMAGE:-moodle-db}:${MOODLE_DB_TAG:-latest}"
+    container_name: ${COMPOSE_PROJECT_NAME}-moodle-db
+    hostname: moodle-db
+    environment:
+      - TZ=America/Sao_Paulo
+      - POSTGRES_DB=moodle
+      - POSTGRES_USER=moodle
+      - POSTGRES_PASSWORD=${POSTGRESQL_PASSWORD}
+      - BKP_RETENTION_DAYS=${BKP_RETENTION_DAYS}
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    deploy:
+      resources:
+          limits:
+              memory: ${MOODLE_DB_MEMORY_LIMIT}
+              cpus: ${MOODLE_DB_CPU_LIMIT}
+    networks:
+      - moodle-network
+    ports:
+    - published: ${MOODLE_DB_PORT}
+      target: 5432
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+      - backup_db:/var/backups/
+      - postgres_custom_config:/custom/
+      - pglogs:/var/log/postgresql/
+    # entrypoint: /bin/bash -c "sleep infinity" #(modo de manutencao)
+
+  moodle-app:
+    image: "${DOCKER_OWNER:-moodle-docker}/${MOODLE_APP_IMAGE:-moodle-app}:${MOODLE_APP_TAG:-latest}"
+    container_name: ${COMPOSE_PROJECT_NAME}-moodle-app
+    hostname: moodle-app
+    environment:
+      - MOODLE_DATABASE_TYPE=pgsql
+      - MOODLE_DATABASE_HOST=moodle-db
+      - MOODLE_DATABASE_PORT_NUMBER=5432
+      - MOODLE_DATABASE_USER=moodle
+      - MOODLE_DATABASE_PASSWORD=${POSTGRESQL_PASSWORD}
+      - MOODLE_DATABASE_NAME=moodle
+      - MOODLE_DATABASE_PREFIX="mdl_"
+      - MOODLE_HOST=${DOMAIN_NAME}
+      - MOODLE_ADMIN_USERNAME=solis
+      - MOODLE_ADMIN_PASSWORD=${MOODLE_ADMIN_PASSWORD}
+      - MOODLE_ADMIN_EMAIL="infra@solis.com.br"
+      - MOODLE_SITE_NAME="Instalacao MOODLE ${CLIENT_NAME}"
+      - MOODLE_SORT_NAME=${COMPOSE_PROJECT_NAME}
+      - MOODLE_LANG=pt_br
+      - TZ=America/Sao_Paulo
+      - PHP_INI-date.timezone="America/Sao_Paulo"
+      - PHP_INI-memory_limit=${PHP_MEMORY_LIMIT}
+      - PHP_INI-post_max_size=${PHP_POST_MAX_SIZE}
+      - PHP_INI-upload_max_filesize=${PHP_UPLOAD_MAX_FILESIZE}
+      - PHP_INI-max_input_vars=${PHP_MAX_INPUT_VARS}
+      - PHP_INI-max_execution_time=${PHP_MAX_EXECUTION_TIME}
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    deploy:
+      resources:
+          limits:
+              memory: ${MOODLE_APP_MEMORY_LIMIT}
+              cpus: ${MOODLE_APP_CPU_LIMIT}
+    networks:
+      - moodle-network
+        #    ports:
+        #    - published: ${MOODLE_APP_HTTP_PORT}
+        #      target: 80
+        #    - published: ${MOODLE_APP_HTTPS_PORT}
+        #      target: 443
+    extra_hosts:
+      - "moodle.local:127.0.0.1"
+    volumes:
+      - moodle_custom_config:/custom/
+      - moodledata:/var/www/moodledata
+      - applogs:/var/log
+    working_dir: /var/www/html
+    depends_on:
+      - moodle-db
+    # command: sleep infinity #(modo de manutencao)
+
+####################
+## Volumes Docker ##
+####################
+volumes:
+  dbdata:
+  backup_db:
+  moodle_custom_config:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/custom-config/moodle
+      o: bind
+  moodledata:
+  applogs:
+  pglogs:
+  postgres_custom_config:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/custom-config/postgres
+      o: bind
+
+#################
+## Rede Docker ##
+#################
+networks:
+  moodle-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${COMPOSE_PROJECT_SUBNET}
