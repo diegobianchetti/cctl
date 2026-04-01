@@ -1,0 +1,17 @@
+# Dados sensiveis (nunca commitados)
+.env
+.cctl-instance
+
+# Logs
+logs/
+*.log
+
+# Arquivos temporarios
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db

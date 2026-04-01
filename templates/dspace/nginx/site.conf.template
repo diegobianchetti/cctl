@@ -1,0 +1,101 @@
+server {
+    server_name ${DOMAIN_NAME};
+
+    # BLOCK SQL INJECT
+    include /etc/nginx/conf.d/*;
+    # Logs
+    access_log /var/log/nginx/access-${DOMAIN_NAME}.log;
+    error_log /var/log/nginx/error-${DOMAIN_NAME}.log;
+
+    # Resolver com suporte a cache curto
+    resolver 10.89.0.1 valid=10s;
+
+    # -------------------------------------------------------
+    # BLOQUEIO DE BOTS AGRESSIVOS
+    # -------------------------------------------------------
+    if ($http_user_agent ~* "(meta-externalagent|SemrushBot|MJ12bot|AwarioBot|Sogou|PetalBot|ChatGPT-User|ClaudeBot|GPTBot|Google-Extended|Bytespider|DotBot|AhrefsBot)") {
+        return 403;
+    }
+    # -------------------------------------------------------
+    # Bloquear scans de PHP/WordPress/scripts maliciosos
+    # -------------------------------------------------------
+    location ~* \.(php|asp|aspx|jsp|cgi)$ {
+        return 444;
+        access_log off;
+    }
+
+    location ~* ^/(wp-includes|wp-content|wp-admin|wordpress|xmlrpc) {
+        return 444;
+        access_log off;
+    }
+    # -------------------------------------------------------
+    # HEALTHCHECK - Uptime Kuma deve monitorar esta URL
+    # Resposta instantanea sem acionar SSR nem REST API
+    # -------------------------------------------------------
+    location = /health-check {
+        return 200 "OK";
+        add_header Content-Type text/plain;
+        access_log off;
+    }
+    # -------------------------------------------------------
+
+    location /server {
+        # Variavel para evitar erro de boot se o container estiver offline
+        set $backend_upstream ${COMPOSE_PROJECT_NAME}-dspace;
+        proxy_pass http://$backend_upstream:8080;
+
+        # Headers obrigatorios para DSpace 7/8/9
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Server $host;
+
+        # Cookies: Lax para garantir que o cookie de sessao sobreviva ao redirecionamento interno do Angular
+        proxy_cookie_path / "/; secure; HttpOnly; SameSite=Lax";
+        proxy_redirect off;
+
+        # Repasse de Headers de Origem (POST do Agreement)
+        proxy_set_header Origin $http_origin;
+        proxy_set_header Referer $http_referer;
+
+        # body size
+        client_max_body_size 150M;
+
+        # Buffers ajustados para concorrencia
+        proxy_buffer_size 512k;
+        proxy_buffers 8 256k;
+        proxy_busy_buffers_size 1024k;
+
+        # Timeouts
+        proxy_connect_timeout 15s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 60s;
+    }
+
+    location / {
+        set $frontend_upstream ${COMPOSE_PROJECT_NAME}-dspace-angular;
+        proxy_pass http://$frontend_upstream:4000;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Server $host;
+
+        # body size
+        client_max_body_size 150M;
+
+        # Buffers ajustados para concorrencia
+        proxy_buffer_size 512k;
+        proxy_buffers 8 256k;
+        proxy_busy_buffers_size 1024k;
+
+        # Timeouts
+        proxy_connect_timeout 15s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 60s;
+    }
+}
