@@ -1,0 +1,46 @@
+## Item Archived email message
+##
+## {0}  Title of submission
+## {1}  Name of collection
+## {2}  handle
+##
+#set($subject = "${config.get('dspace.name')}: Submission Approved and Archived")
+
+#You submitted: ${params[0]}
+
+#To collection: ${params[1]}
+
+#Your submission has been accepted and archived in ${config.get('dspace.name')},
+#and it has been assigned the following identifier:
+#${params[2]}
+
+#Please use this identifier when citing your submission.
+
+#Many thanks!
+
+#The ${config.get('dspace.name')} Team
+#
+#
+#
+## Mensagem de e-mail sobre Item Arquivado
+##
+## {0}  Título da submissão
+## {1}  Nome da coleção
+## {2}  Handle
+##
+#set($subject = "${config.get('dspace.name')}: Submissão Aprovada e Arquivada")
+
+Você submeteu: ${params[0]}
+
+Para a coleção: ${params[1]}
+
+Sua submissão foi aceita e arquivada no ${config.get('dspace.name')},
+e foi atribuído o seguinte identificador:
+${params[2]}
+
+Por favor, utilize este identificador ao citar sua submissão.
+
+Muito obrigado!
+
+Equipe do ${config.get('dspace.name')}
+

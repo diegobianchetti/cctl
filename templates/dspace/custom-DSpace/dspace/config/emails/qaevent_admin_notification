@@ -1,0 +1,30 @@
+## E-mail sent to notify Administrator of new Withdrawn/Reinstate request
+##
+## Parameters: {0} Type of request 'topic'
+##             {1} resource id
+##             {2} reason
+##
+#set($subject = "Notification about ${params[0]} Request")
+
+#Item Details:
+
+#Type of request: ${params[0]}
+#Relatem to item: ${params[1]}
+#Reason: ${params[2]}
+#
+#
+####
+## E-mail enviado para notificar o Administrador sobre uma nova solicitação de Retirada/Reintegração
+##
+## Parâmetros: {0} Tipo de solicitação 'tópico'
+##             {1} ID do recurso
+##             {2} Motivo
+##
+#set($subject = "Notificação sobre Solicitação de ${params[0]}")
+
+Detalhes do Item:
+
+Tipo de solicitação: ${params[0]}
+Relacionado ao item: ${params[1]}
+Motivo: ${params[2]}
+

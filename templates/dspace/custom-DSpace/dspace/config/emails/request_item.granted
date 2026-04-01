@@ -1,0 +1,55 @@
+## Sent to the person requesting a copy of a restricted document when the
+## request is granted.
+##
+## Parameters:
+##  {0} name of the requestor
+##  {1} Handle URL of the requested Item
+##  {2} title of the requested Item
+##  {3} name of the grantor
+##  {4} email address of the grantor (unused)
+##  {5} custom message sent by the grantor.
+#set($subject = 'Request for Copy of Restricted Document is Granted')
+#Dear ${params[0]}:
+
+#Your request for a copy of the file(s) from the below document has been approved by ${params[3]}.  You may find the requested file(s) attached.
+
+#    ${params[2]}
+#    ${params[1]} 
+#if( $params[5] )
+
+#An additional message from ${params[3]} follows:
+
+#${params[5]}
+#end
+
+#Best regards,
+#The ${config.get('dspace.name')} Team
+#
+#
+## Enviado para a pessoa que solicitou uma cópia de um documento restrito quando a
+## solicitação é aprovada.
+##
+## Parâmetros:
+##  {0} nome do solicitante
+##  {1} URL do Handle do Item solicitado
+##  {2} título do Item solicitado
+##  {3} nome do aprovador
+##  {4} endereço de e-mail do aprovador (não utilizado)
+##  {5} mensagem personalizada enviada pelo aprovador.
+#set($subject = 'Solicitação de Cópia de Documento Restrito Aprovada')
+Caro(a) ${params[0]}:
+
+Sua solicitação para obter uma cópia dos arquivos do documento abaixo foi aprovada por ${params[3]}. Você encontrará os arquivos solicitados anexados.
+
+    ${params[2]}
+    ${params[1]}
+#if( $params[5] )
+
+Segue uma mensagem adicional de ${params[3]}:
+
+${params[5]}
+#end
+
+Atenciosamente,  
+Equipe do ${config.get('dspace.name')}
+

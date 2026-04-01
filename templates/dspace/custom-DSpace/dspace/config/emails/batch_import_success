@@ -1,0 +1,33 @@
+
+## Email sent to DSpace users when they successfully batch import items.
+##
+## Parameters: {0} the filepath to the mapfile created by the batch import
+##
+##
+## See org.dspace.core.Email for information on the format of this file.
+##
+#set($subject = 'DSpace - Batch import successfully completed')
+#The batch item import you initiated from the DSpace UI has completed successfully.
+#
+#You may find the mapfile for the import in the following path: ${params[0]}
+#
+#
+#The DSpace Team
+#
+#####
+## Email enviado aos usuários do Repositório Institucional quando a importação em lote de itens é concluída com sucesso.
+##
+## Parâmetros: {0} o caminho do arquivo de mapa criado pela importação em lote
+##
+##
+## Veja org.dspace.core.Email para informações sobre o formato deste arquivo.
+##
+#set($subject = 'Repositório Institucional - Importação em lote concluída com sucesso')
+A importação em lote de itens que você iniciou a partir da interface do Repositório Institucional foi concluída com sucesso.
+
+Você pode encontrar o arquivo de mapa da importação no seguinte caminho: ${params[0]}
+
+
+Equipe do Repositório Institucional
+
+

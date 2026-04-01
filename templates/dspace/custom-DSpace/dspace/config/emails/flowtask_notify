@@ -1,0 +1,51 @@
+## Workflow curation task notification email message
+##
+## {0}  Title of submission
+## {1}  Name of collection
+## {2}  Submitter's name
+## {3}  Name of task operating
+## {4}  Task result
+## {5}  Workflow action taken
+##
+#set($subject = "${config.get('dspace.name')}: Curation Task Report")
+
+#Title:         ${params[0]}
+#Collection:    ${params[1]}
+
+#Submitted by:  ${params[2]}
+
+#Curation task ${params[3]} has been performed
+#with the following result:
+#
+#${params[4]}
+#
+#Action taken on the submission: ${params[5]}
+#
+#The ${config.get('dspace.name')} Team
+#
+#
+#####
+# Mensagem de e-mail de notificação de tarefa de curadoria no fluxo de trabalho
+##
+## {0}  Título da submissão
+## {1}  Nome da coleção
+## {2}  Nome do remetente
+## {3}  Nome da tarefa realizada
+## {4}  Resultado da tarefa
+## {5}  Ação tomada no fluxo de trabalho
+##
+#set($subject = "${config.get('dspace.name')}: Relatório de Tarefa de Curadoria")
+
+Título:        ${params[0]}
+Coleção:       ${params[1]}
+Submetido por: ${params[2]}
+
+A tarefa de curadoria ${params[3]} foi realizada
+com o seguinte resultado:
+
+${params[4]}
+
+Ação tomada na submissão: ${params[5]}
+
+Equipe do ${config.get('dspace.name')}
+

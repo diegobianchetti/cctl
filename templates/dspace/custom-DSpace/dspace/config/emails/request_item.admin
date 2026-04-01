@@ -1,0 +1,43 @@
+## E-mail sent when someone approving an item request, requests that the Item
+## or Bitstream be made public.
+##
+## Parameters: {0} the Handle of the requested bitstream, or "all"
+##             {1} the Handle of the item
+##             {2} the unique token which identifies the item request
+##             {3} the name of the approver
+##             {4} the approver's email address
+## See org.dspace.core.Email for information on the format of this file.
+##
+#set($subject = "${config.get('dspace.name')}: Request for Open Access")
+
+#${params[3]}, with address ${params[4]},
+#requested the following document/file to be in Open Access:
+#
+#Document Handle: ${params[1]}
+#File ID: ${params[0]}
+#Token: ${params[2]}
+#
+#The ${config.get('dspace.name')} Team
+#
+#
+## E-mail enviado quando alguém que está aprovando uma solicitação de item solicita que o Item
+## ou Bitstream seja tornado público.
+##
+## Parâmetros: {0} o Handle do bitstream solicitado, ou "all"
+##             {1} o Handle do item
+##             {2} o token único que identifica a solicitação de item
+##             {3} o nome do aprovador
+##             {4} o e-mail do aprovador
+## Consulte org.dspace.core.Email para informações sobre o formato deste arquivo.
+##
+#set($subject = "${config.get('dspace.name')}: Solicitação de Acesso Aberto")
+
+${params[3]}, com o endereço ${params[4]},
+solicitou que o seguinte documento/arquivo seja disponibilizado em Acesso Aberto:
+
+Handle do Documento: ${params[1]}
+ID do Arquivo: ${params[0]}
+Token: ${params[2]}
+
+Equipe do ${config.get('dspace.name')}
+

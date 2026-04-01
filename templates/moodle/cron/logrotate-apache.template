@@ -1,0 +1,10 @@
+/var/lib/docker/volumes/{{COMPOSE_PROJECT_NAME}}_applogs/_data/apache2/*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    notifempty
+    create 0640 www-data www-data
+    sharedscripts
+    copytruncate
+}

@@ -1,0 +1,61 @@
+## Notification email sent that a resource has been related by a service
+##
+## Parameters: {0} Service Name
+##             {1} Item Name
+##             {2} Service URL
+##             {3} Item URL
+##             {4} Submitter's Name
+##             {5} Date of the received LDN notification
+##             {6} LDN notification
+##             {7} Item
+##
+##
+#set($subject = "DSpace: The Service ${params[0]} has related a Resource ""${params[6].object.subject}""")
+
+#A relationship announce notification has been received relating to the Item: ${params[1]}
+#
+#Here is a more detailed report:
+#Item: ${params[1]}
+#Item URL: ${params[3]}
+#Submitted by: ${params[4]}
+#Linked Resource URL: ${params[6].object.subject}
+#
+#Has a new status: RELATED
+#
+#By Service: ${params[0]}
+#Service URL: ${params[2]}
+#Date: ${params[5]}
+#
+#The ${config.get('dspace.name')} Team
+#
+########
+### Email de notificação enviado quando um recurso foi relacionado por um serviço
+##
+## Parâmetros: {0} Nome do Serviço
+##             {1} Nome do Item
+##             {2} URL do Serviço
+##             {3} URL do Item
+##             {4} Nome do Submissor
+##             {5} Data da notificação LDN recebida
+##             {6} Notificação LDN
+##             {7} Item
+##
+##
+#set($subject = "Repositório Institucional: O Serviço ${params[0]} relacionou um Recurso ""${params[6].object.subject}""")
+
+Uma notificação de relacionamento foi recebida em relação ao Item: ${params[1]}
+
+Aqui está um relatório mais detalhado:
+Item: ${params[1]}
+URL do Item: ${params[3]}
+Submetido por: ${params[4]}
+URL do Recurso Relacionado: ${params[6].object.subject}
+
+Novo status: RELACIONADO
+
+Pelo Serviço: ${params[0]}
+URL do Serviço: ${params[2]}
+Data: ${params[5]}
+
+Equipe do Repositório Institucional
+
