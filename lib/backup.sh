@@ -87,7 +87,8 @@ _backup_volumes() {
 
     local vol
     for vol in ${volumes}; do
-        local vol_backup="${backup_dir}/${backup_name}-vol-$(echo "${vol}" | sed "s/${COMPOSE_PROJECT_NAME}_//").tar.gz"
+        local vol_backup
+        vol_backup="${backup_dir}/${backup_name}-vol-$(echo "${vol}" | sed "s/${COMPOSE_PROJECT_NAME}_//").tar.gz"
         msg_info "Backup do volume: ${vol}..."
 
         docker run --rm \
