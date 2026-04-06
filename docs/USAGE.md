@@ -1,7 +1,7 @@
 # cctl — Guia de Uso
 
 Orquestrador generico para ambientes Docker containerizados.
-Unifica o gerenciamento de projetos DSpace, Moodle e AcmeApp.
+Unifica o gerenciamento de projetos DSpace e Moodle.
 
 ---
 
@@ -24,7 +24,7 @@ Unifica o gerenciamento de projetos DSpace, Moodle e AcmeApp.
 - Bash >= 4.4
 - Git
 - Acesso sudo no servidor (para nginx, cron, SSL)
-- Acesso ao Harbor (`ghcr.io/diegobianchetti`) para pull das imagens
+- Acesso ao registry configurado em `DOCKER_OWNER` para pull das imagens
 
 ---
 
@@ -178,12 +178,12 @@ Apos instalado, todos os comandos operacionais ficam disponiveis:
 ### DSpace
 
 ```bash
-# Local — criar branch para o cliente ACME:
-./cctl init --project dspace --client acme --domain repositorio.exemplo.com.br
+# Local — criar branch para o cliente:
+./cctl init --project dspace --client acme --domain repositorio.acme.example.com
 
 # Servidor — instalar:
 cd /var/docker
-git clone --branch dspace-acme --single-branch git@github.com:acme/containers-control.git dspace-acme
+git clone --branch dspace-acme --single-branch git@github.com:usuario/cctl.git dspace-acme
 cd dspace-acme
 ./cctl install
 
@@ -201,11 +201,11 @@ Servicos DSpace: `dspace` (backend), `dspace-angular` (frontend), `dspacedb` (Po
 
 ```bash
 # Local:
-./cctl init --project moodle --client acme --domain moodle.exemplo.com.br
+./cctl init --project moodle --client acme --domain moodle.acme.example.com
 
 # Servidor:
 cd /var/docker
-git clone --branch moodle-acme --single-branch git@github.com:acme/containers-control.git moodle-acme
+git clone --branch moodle-acme --single-branch git@github.com:usuario/cctl.git moodle-acme
 cd moodle-acme
 ./cctl install
 
@@ -218,28 +218,6 @@ cd moodle-acme
 ```
 
 Servicos Moodle: `moodle-app`, `moodle-db`
-
-### AcmeApp
-
-```bash
-# Local:
-./cctl init --project acmeapp --client acme --domain app.exemplo.com.br
-
-# Servidor:
-cd /var/docker
-git clone --branch app-acme --single-branch git@github.com:acme/containers-control.git app-acme
-cd app-acme
-./cctl install
-
-# Operacao:
-./cctl ps
-./cctl connect acmeapp_app
-./cctl logs acmeapp_proxy
-```
-
-Servicos AcmeApp: `acmeapp_proxy`, `acmeapp_app`, `acmeapp_reports`
-
-> **Nota:** O AcmeApp usa proxy nginx proprio (container), entao `HOST_NGINX=false` e `HOST_SSL=false`.
 
 ---
 
