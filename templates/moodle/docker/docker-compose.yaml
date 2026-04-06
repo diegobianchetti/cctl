@@ -1,6 +1,6 @@
-####################################
-## Docker-Compose: Moodle (Solis) ##
-####################################
+################################
+## Docker-Compose: Moodle     ##
+################################
 services:
   moodle-db:
     image: "${DOCKER_OWNER:-moodle-docker}/${MOODLE_DB_IMAGE:-moodle-db}:${MOODLE_DB_TAG:-latest}"
@@ -45,9 +45,9 @@ services:
       - MOODLE_DATABASE_NAME=moodle
       - MOODLE_DATABASE_PREFIX="mdl_"
       - MOODLE_HOST=${DOMAIN_NAME}
-      - MOODLE_ADMIN_USERNAME=solis
+      - MOODLE_ADMIN_USERNAME=admin
       - MOODLE_ADMIN_PASSWORD=${MOODLE_ADMIN_PASSWORD}
-      - MOODLE_ADMIN_EMAIL="infra@solis.com.br"
+      - MOODLE_ADMIN_EMAIL="admin@example.com"
       - MOODLE_SITE_NAME="Instalacao MOODLE ${CLIENT_NAME}"
       - MOODLE_SORT_NAME=${COMPOSE_PROJECT_NAME}
       - MOODLE_LANG=pt_br

@@ -1,7 +1,7 @@
 # cctl — Guia de Uso
 
 Orquestrador generico para ambientes Docker containerizados.
-Unifica o gerenciamento de projetos DSpace, Moodle e Multi24H.
+Unifica o gerenciamento de projetos DSpace e Moodle.
 
 ---
 
@@ -24,7 +24,7 @@ Unifica o gerenciamento de projetos DSpace, Moodle e Multi24H.
 - Bash >= 4.4
 - Git
 - Acesso sudo no servidor (para nginx, cron, SSL)
-- Acesso ao Harbor (`harbor.solis.com.br`) para pull das imagens
+- Acesso ao registry configurado em `DOCKER_OWNER` para pull das imagens
 
 ---
 
@@ -178,13 +178,13 @@ Apos instalado, todos os comandos operacionais ficam disponiveis:
 ### DSpace
 
 ```bash
-# Local — criar branch para o cliente IAC:
-./cctl init --project dspace --client iac --domain repositorio.iac.sp.gov.br
+# Local — criar branch para o cliente:
+./cctl init --project dspace --client acme --domain repositorio.acme.example.com
 
 # Servidor — instalar:
 cd /var/docker
-git clone --branch dspace-iac --single-branch git@github.com:solis/containers-control.git dspace-iac
-cd dspace-iac
+git clone --branch dspace-acme --single-branch git@github.com:usuario/cctl.git dspace-acme
+cd dspace-acme
 ./cctl install
 
 # Operacao:
@@ -201,12 +201,12 @@ Servicos DSpace: `dspace` (backend), `dspace-angular` (frontend), `dspacedb` (Po
 
 ```bash
 # Local:
-./cctl init --project moodle --client unicamp --domain moodle.unicamp.br
+./cctl init --project moodle --client acme --domain moodle.acme.example.com
 
 # Servidor:
 cd /var/docker
-git clone --branch moodle-unicamp --single-branch git@github.com:solis/containers-control.git moodle-unicamp
-cd moodle-unicamp
+git clone --branch moodle-acme --single-branch git@github.com:usuario/cctl.git moodle-acme
+cd moodle-acme
 ./cctl install
 
 # Operacao:
@@ -218,28 +218,6 @@ cd moodle-unicamp
 ```
 
 Servicos Moodle: `moodle-app`, `moodle-db`
-
-### Multi24H
-
-```bash
-# Local:
-./cctl init --project multi24h --client tecnos --domain multi24h.tecnos.com.br
-
-# Servidor:
-cd /var/docker
-git clone --branch multi24h-tecnos --single-branch git@github.com:solis/containers-control.git multi24h-tecnos
-cd multi24h-tecnos
-./cctl install
-
-# Operacao:
-./cctl ps
-./cctl connect multi24h_app
-./cctl logs multi24h_proxy
-```
-
-Servicos Multi24H: `multi24h_proxy`, `multi24h_app`, `multi24h_reports`
-
-> **Nota:** O Multi24H usa proxy nginx proprio (container), entao `HOST_NGINX=false` e `HOST_SSL=false`.
 
 ---
 
