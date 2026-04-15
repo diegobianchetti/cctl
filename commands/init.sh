@@ -180,7 +180,7 @@ _init_usage() {
     echo "Uso: cctl init --project <tipo> --client <nome> --domain <dominio>"
     echo ""
     echo "Exemplo:"
-    echo "  cctl init --project dspace --client iac --domain repositorio.iac.sp.gov.br"
+    echo "  cctl init --project dspace --client oogway --domain repositorio.oogway.com.br"
     echo ""
     echo "Templates disponiveis:"
     ls -1 "${CCTL_ROOT}/templates/" 2>/dev/null | sed 's/^/  - /' || echo "  (nenhum)"
