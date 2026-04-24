@@ -130,6 +130,16 @@ cmd_init() {
     env_set_var "DOMAIN_NAME" "${domain_name}"
     env_set_var "COMPOSE_PROJECT_NAME" "${branch_name}"
 
+    # Renderiza placeholders no project.conf
+    if [[ -f "./project.conf" ]]; then
+        sed -i \
+            -e "s|_CLIENT_NAME_|${client_name}|g" \
+            -e "s|_DOMAIN_NAME_|${domain_name}|g" \
+            -e "s|_COMPOSE_PROJECT_NAME_|${branch_name}|g" \
+            "./project.conf"
+        log_success "project.conf renderizado"
+    fi
+
     # 10. Commit
     msg_step "4/5" "Commit..."
     git add -A
