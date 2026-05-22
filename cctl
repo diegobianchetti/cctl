@@ -17,6 +17,17 @@ set -euo pipefail
 CCTL_ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 export CCTL_ROOT
 
+# cctl nao suporta execucao global — deve ser invocado como ./cctl
+# dentro do seu proprio diretorio de instalacao
+if [[ "$(pwd)" != "${CCTL_ROOT}" ]]; then
+    echo "ERRO: cctl deve ser executado de dentro do seu diretorio de instalacao." >&2
+    echo "  Diretorio atual:   $(pwd)" >&2
+    echo "  Diretorio do cctl: ${CCTL_ROOT}" >&2
+    echo "" >&2
+    echo "  Execute: cd ${CCTL_ROOT} && ./cctl <comando>" >&2
+    exit 1
+fi
+
 # Bootstrap: carrega libs
 source "${CCTL_ROOT}/lib/core.sh"
 core_bootstrap
