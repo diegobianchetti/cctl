@@ -140,6 +140,16 @@ cmd_init() {
         log_success "project.conf renderizado"
     fi
 
+    # Renderiza vhost nginx
+    if [[ -f "./nginx/site.conf.template" ]]; then
+        sed \
+            -e "s|{{DOMAIN_NAME}}|${domain_name}|g" \
+            -e "s|{{COMPOSE_PROJECT_NAME}}|${branch_name}|g" \
+            "./nginx/site.conf.template" > "./nginx/${branch_name}.conf"
+        rm -f "./nginx/site.conf.template"
+        log_success "Vhost nginx gerado: nginx/${branch_name}.conf"
+    fi
+
     # 10. Commit
     msg_step "4/5" "Commit..."
     git add -A
