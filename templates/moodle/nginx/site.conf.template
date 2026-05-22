@@ -9,10 +9,14 @@ server {
 	listen 443 ssl;
 	listen [::]:443 ssl;
 	server_name {{DOMAIN_NAME}};
-	# BLOCK SQL INJECT
-	include /etc/nginx/conf.d/nginx_block_injects.conf;
-	# Certs
-	include /etc/nginx/snippets/snakeoil.conf;
+
+	ssl_certificate     /etc/letsencrypt/live/{{DOMAIN_NAME}}/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/{{DOMAIN_NAME}}/privkey.pem;
+
+	if ($block_uri_pattern) { return 444; }
+	if ($block_ip)          { return 444; }
+
+	include /etc/nginx/conf.d/error-pages.conf;
 
 	location / {
 		resolver 127.0.0.11;
@@ -30,7 +34,6 @@ server {
 		proxy_connect_timeout   60m;
 	}
 
-	# LOGS
-	access_log  /var/log/nginx/{{COMPOSE_PROJECT_NAME}}-access-moodle-app.log;
-	error_log /var/log/nginx/{{COMPOSE_PROJECT_NAME}}-error-moodle-app.log;
+	access_log  /var/log/nginx/{{COMPOSE_PROJECT_NAME}}-access-moodle.log;
+	error_log   /var/log/nginx/{{COMPOSE_PROJECT_NAME}}-error-moodle.log;
 }
