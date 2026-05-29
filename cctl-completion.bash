@@ -1,5 +1,6 @@
 #!/bin/bash
 # cctl-completion.bash — Autocomplete bash para o cctl
+# shellcheck disable=SC2207  # COMPREPLY=( $(compgen -W ...) ) é o padrão idiomático de bash completion
 #
 # Instalacao (adicionar ao ~/.bashrc ou /etc/bash_completion.d/cctl):
 #
@@ -11,7 +12,7 @@
 #   source /etc/bash_completion.d/cctl
 
 _cctl_completions() {
-    local cur prev words
+    local cur prev
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
