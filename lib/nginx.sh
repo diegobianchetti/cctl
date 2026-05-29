@@ -1,13 +1,11 @@
 #!/bin/bash
-# lib/nginx.sh — Gerenciamento de configuracao Nginx no host
+# lib/nginx.sh — Gerenciamento de configuracao Nginx no host (nginx-proxy)
 
-# Paths padrao do nginx (container nginx em /var/docker/nginx)
-NGINX_BASE_DIR="/var/docker/nginx"
-NGINX_SITES_AVAILABLE="${NGINX_BASE_DIR}/config/sites-available"
-NGINX_SITES_ENABLED="${NGINX_BASE_DIR}/config/sites-enabled"
-NGINX_COMPOSE_FILE="${NGINX_BASE_DIR}/docker-compose.yml"
+# Container nginx-proxy e diretorio de vhosts no host
+NGINX_CONTAINER_NAME="${NGINX_CONTAINER_NAME:-nginx-proxy}"
+NGINX_VHOSTS_DIR="${NGINX_VHOSTS_DIR:-/etc/nginx-proxy/vhosts.d}"
 
-# Instala config do site no nginx
+# Instala config do site no nginx-proxy
 nginx_enable_site() {
     local domain="${1:-${DOMAIN_NAME}}"
     local nginx_conf_src="${2:-./nginx/site.conf}"
@@ -17,56 +15,46 @@ nginx_enable_site() {
         return 1
     fi
 
-    local site_available="${NGINX_SITES_AVAILABLE}/${domain}.conf"
-    local site_enabled="${NGINX_SITES_ENABLED}/${domain}.conf"
+    if [[ ! -d "${NGINX_VHOSTS_DIR}" ]]; then
+        log_error "Diretorio ${NGINX_VHOSTS_DIR} nao existe. nginx-proxy esta instalado?"
+        return 1
+    fi
 
-    # Copia config para sites-available
-    sudo cp "${nginx_conf_src}" "${site_available}"
+    local vhost_dst="${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf"
 
-    # Cria symlink em sites-enabled
-    sudo ln -sf "${site_available}" "${site_enabled}"
+    sudo cp "${nginx_conf_src}" "${vhost_dst}"
 
-    # Testa e recarrega
     if nginx_test_and_reload; then
-        log_success "Site ${domain} habilitado no Nginx"
+        log_success "Site ${domain} habilitado no nginx-proxy"
         return 0
     else
-        # Reverte em caso de erro
         log_error "Config nginx invalida! Revertendo..."
-        sudo rm -f "${site_enabled}"
+        sudo rm -f "${vhost_dst}"
         return 1
     fi
 }
 
-# Remove config do site do nginx
+# Remove config do site do nginx-proxy
 nginx_disable_site() {
     local domain="${1:-${DOMAIN_NAME}}"
+    local vhost_dst="${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf"
     local backup_dir="/tmp/nginx_backup_${COMPOSE_PROJECT_NAME}"
 
-    local site_available="${NGINX_SITES_AVAILABLE}/${domain}.conf"
-    local site_enabled="${NGINX_SITES_ENABLED}/${domain}.conf"
-
-    # Backup
     mkdir -p "${backup_dir}"
-    [[ -f "${site_available}" ]] && cp -p "${site_available}" "${backup_dir}/"
+    [[ -f "${vhost_dst}" ]] && cp -p "${vhost_dst}" "${backup_dir}/"
 
-    # Remove
     msg_info "Removendo configuracao nginx para ${domain}..."
-    echo -e "  ${CYAN}${site_enabled}${RESET}"
-    sudo rm -f "${site_enabled}"
-    echo -e "  ${CYAN}${site_available}${RESET}"
-    sudo rm -f "${site_available}"
+    echo -e "  ${CYAN}${vhost_dst}${RESET}"
+    sudo rm -f "${vhost_dst}"
 
-    # Testa e recarrega
     if nginx_test_and_reload; then
         rm -rf "${backup_dir}"
-        log_success "Site ${domain} removido do Nginx"
+        log_success "Site ${domain} removido do nginx-proxy"
         return 0
     else
-        # Restaura backup
         log_error "Config nginx invalida apos remocao! Restaurando..."
-        [[ -f "${backup_dir}/${domain}.conf" ]] && sudo cp -p "${backup_dir}/${domain}.conf" "${site_available}"
-        [[ -f "${site_available}" ]] && sudo ln -sf "${site_available}" "${site_enabled}"
+        [[ -f "${backup_dir}/${COMPOSE_PROJECT_NAME}.conf" ]] && \
+            sudo cp -p "${backup_dir}/${COMPOSE_PROJECT_NAME}.conf" "${vhost_dst}"
         nginx_test_and_reload
         rm -rf "${backup_dir}"
         return 1
@@ -77,9 +65,9 @@ nginx_disable_site() {
 nginx_test_and_reload() {
     msg_info "Testando configuracao nginx..."
 
-    if docker compose -p nginx exec nginx nginx -t 2>/dev/null; then
+    if docker exec "${NGINX_CONTAINER_NAME}" nginx -t 2>/dev/null; then
         msg_success "Configuracao valida"
-        docker compose -p nginx exec nginx nginx -s reload 2>/dev/null
+        docker exec "${NGINX_CONTAINER_NAME}" nginx -s reload 2>/dev/null
         return 0
     else
         msg_error "Configuracao nginx invalida!"
@@ -87,34 +75,10 @@ nginx_test_and_reload() {
     fi
 }
 
-# Remove referencia da rede do projeto no docker-compose.yml do nginx
+# Noop: nginx-proxy usa redes runtime (docker network connect/disconnect),
+# nao precisa de alteracao no compose file
 nginx_remove_network_config() {
     local project_network="$1"
-
-    if [[ ! -f "${NGINX_COMPOSE_FILE}" ]]; then
-        log_warn "docker-compose.yml do nginx nao encontrado"
-        return 0
-    fi
-
-    if ! command -v yq &>/dev/null; then
-        log_warn "yq nao disponivel. Remova manualmente a rede ${project_network} de ${NGINX_COMPOSE_FILE}"
-        return 0
-    fi
-
-    # Backup
-    cp "${NGINX_COMPOSE_FILE}" "${NGINX_COMPOSE_FILE}.bak"
-
-    # Remove referencias da rede
-    yq eval "del(.networks.\"${project_network}\")" -i "${NGINX_COMPOSE_FILE}"
-    yq eval "del(.services.nginx.networks[] | select(. == \"${project_network}\"))" -i "${NGINX_COMPOSE_FILE}"
-
-    # Valida
-    if docker compose -f "${NGINX_COMPOSE_FILE}" config &>/dev/null; then
-        rm -f "${NGINX_COMPOSE_FILE}.bak"
-        log_success "Rede ${project_network} removida do nginx compose"
-    else
-        log_error "Configuracao invalida apos remocao! Restaurando backup..."
-        mv "${NGINX_COMPOSE_FILE}.bak" "${NGINX_COMPOSE_FILE}"
-        return 1
-    fi
+    log_debug "nginx-proxy usa redes runtime — nenhuma alteracao no compose necessaria para ${project_network}"
+    return 0
 }
