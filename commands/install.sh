@@ -124,21 +124,33 @@ _install_nginx() {
     fi
 
     msg_step "NGINX" "Configurando Nginx..."
-    nginx_enable_site || return 1
 
-    # Conecta nginx-proxy a rede do projeto para acessar o container da aplicacao
+    # Conecta a rede antes de testar o config (resolver Docker precisa da rede)
     local project_network
     project_network=$(docker network ls --filter "name=${COMPOSE_PROJECT_NAME}" --format "{{.Name}}" | head -1)
     if [[ -n "${project_network}" ]]; then
         network_connect_nginx "${project_network}"
     fi
+
+    # Seleciona vhost baseado em MOODLE_SSL (false = HTTP-only sem certificado)
+    local nginx_conf="./nginx/site.conf"
+    if [[ "${MOODLE_SSL:-true}" == "false" ]]; then
+        nginx_conf="./nginx/site-nossl.conf"
+        log_debug "MOODLE_SSL=false — usando vhost HTTP-only"
+    fi
+
+    nginx_enable_site "${DOMAIN_NAME}" "${nginx_conf}" || return 1
 }
 
-# Solicita/instala certificado SSL (se HOST_SSL=true)
-# Delega para ssl_issue() que trata SSL_MODE (letsencrypt|manual)
+# Solicita/instala certificado SSL (se HOST_SSL=true e MOODLE_SSL=true)
 _install_ssl() {
     if [[ "${HOST_SSL:-false}" != "true" ]]; then
         log_debug "HOST_SSL desabilitado, pulando SSL"
+        return 0
+    fi
+
+    if [[ "${MOODLE_SSL:-true}" == "false" ]]; then
+        log_debug "MOODLE_SSL=false — pulando SSL"
         return 0
     fi
 
