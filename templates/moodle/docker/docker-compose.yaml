@@ -51,6 +51,7 @@ services:
       - MOODLE_SITE_NAME="Instalacao MOODLE ${CLIENT_NAME}"
       - MOODLE_SORT_NAME=${COMPOSE_PROJECT_NAME}
       - MOODLE_LANG=pt_br
+      - MOODLE_SSL=${MOODLE_SSL:-true}
       - TZ=America/Sao_Paulo
       - PHP_INI-date.timezone="America/Sao_Paulo"
       - PHP_INI-memory_limit=${PHP_MEMORY_LIMIT}
