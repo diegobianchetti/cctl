@@ -1,5 +1,6 @@
 #!/bin/bash
 # lib/colors.sh — Output colorido com deteccao de terminal
+# shellcheck disable=SC2034  # variáveis exportadas para uso em outros scripts via source
 
 # Detecta suporte a cores
 if [[ -t 1 ]]; then

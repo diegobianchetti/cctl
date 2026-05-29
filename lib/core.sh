@@ -1,5 +1,6 @@
 #!/bin/bash
 # lib/core.sh — Bootstrap, parse args, dispatch, deteccao de contexto
+# shellcheck disable=SC2034  # variáveis globais exportadas para uso via source em commands/ e lib/
 
 # Versao do cctl
 CCTL_VERSION="0.1.0"
@@ -92,6 +93,7 @@ core_load_manifest() {
     fi
 
     if [[ -n "${manifest}" && -f "${manifest}" ]]; then
+        # shellcheck source=/dev/null
         source "${manifest}"
         log_debug "Manifest carregado: ${manifest} (PROJECT_TYPE=${PROJECT_TYPE:-?})"
     fi
@@ -110,6 +112,7 @@ core_dispatch() {
         return 1
     fi
 
+    # shellcheck source=/dev/null
     source "${cmd_file}"
 
     if declare -f "cmd_${cmd}" > /dev/null 2>&1; then

@@ -2,6 +2,10 @@
 .env
 .cctl-instance
 
+# Arquivos de sessão local (não vão para o repositório público)
+WORK_LOG.md
+CLAUDE.md
+
 # Logs
 logs/
 *.log
