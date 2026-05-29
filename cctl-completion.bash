@@ -135,3 +135,6 @@ _cctl_get_services() {
 # Registra o completion para cctl e ./cctl
 complete -F _cctl_completions cctl
 complete -F _cctl_completions ./cctl
+
+# Sinaliza que o completion esta ativo (herdado por subprocessos via export)
+export CCTL_COMPLETION_LOADED=1
