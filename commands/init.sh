@@ -158,8 +158,12 @@ cmd_init() {
     # 11. Push (se remote configurado)
     msg_step "5/5" "Push..."
     if git remote get-url origin &>/dev/null; then
-        git push -u origin "${branch_name}"
-        log_success "Branch ${branch_name} enviada para o remote"
+        if git push -u origin "${branch_name}" 2>/dev/null; then
+            log_success "Branch ${branch_name} enviada para o remote"
+        else
+            log_warn "Push falhou (sem credenciais ou remote inacessivel)."
+            log_warn "Execute manualmente: git push -u origin ${branch_name}"
+        fi
     else
         log_warn "Nenhum remote configurado. Push sera necessario manualmente."
     fi
