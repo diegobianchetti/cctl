@@ -1,8 +1,8 @@
 # cctl — containers-control
 
 Orquestrador Bash para ambientes Docker containerizados. Automatiza o ciclo
-completo de um projeto: inicialização de branch, deploy no servidor e operações
-do dia a dia — sem dependências externas além do Docker e do git.
+completo de um projeto: inicialização de diretório, deploy no servidor e operações
+do dia a dia — sem dependências externas além do Docker.
 
 ## O que resolve
 
@@ -11,8 +11,8 @@ num mesmo servidor é trabalhoso: senhas geradas manualmente, subnets conflitant
 vhosts criados à mão, crons esquecidos. O cctl codifica esse processo num único
 fluxo reproduzível:
 
-1. **`cctl init`** (local): cria uma branch git isolada por cliente, copia o
-   template correto e gera o vhost nginx para revisão
+1. **`cctl init`** (local): cria um diretório standalone com os arquivos do template
+   renderizados — `.env`, `project.conf`, `docker-compose.yaml` e vhost nginx
 2. **`cctl install`** (servidor): gera senhas, aloca subnet, renderiza templates,
    sobe os containers, instala crons e registra o vhost no proxy reverso
 3. **Operações do dia a dia**: `ps`, `logs`, `backup`, `connect`, `update` e mais
@@ -21,35 +21,63 @@ fluxo reproduzível:
 
 - Docker Engine 24+
 - Docker Compose (plugin V2)
-- git 2.x
 - Bash 5.x
 - [nginx-proxy](https://github.com/diegobianchetti/nginx-proxy) em execução
   (necessário para `cctl install`)
+
+## Instalação
+
+```bash
+git clone https://github.com/diegobianchetti/cctl.git
+cd cctl
+
+# Opcional: disponibilizar globalmente
+sudo ln -s "$(pwd)/cctl" /usr/local/bin/cctl
+source cctl-completion.bash   # autocomplete
+```
 
 ## Fluxo de uso
 
 ### 1. Inicialização (na máquina local)
 
 ```bash
-# No repositório do cctl, na branch main
-./cctl init --project moodle --client acme --domain moodle.acme.example.br
+cctl init moodle moodle-acme
 ```
 
-O `init` cria a branch `moodle-acme`, copia o template, preenche o `.env` com
-dados não-sensíveis e faz o commit + push para o remote.
+O comando solicita o diretório de destino (sugerindo `$(pwd)/moodle-acme/` e
+`/opt/moodle-acme/`) e o domínio, depois gera o projeto com tudo preenchido:
+
+```
+/opt/moodle-acme/
+  docker/
+    docker-compose.yaml
+    .env               ← CLIENT_NAME, COMPOSE_PROJECT_NAME e DOMAIN_NAME preenchidos
+  nginx/
+    site.conf.template
+    site-nossl.conf.template
+    moodle-acme.conf   ← vhost de referência (gerado se domínio informado)
+  project.conf         ← manifest do projeto
+  ...
+```
+
+Também aceita flags para uso não-interativo:
+
+```bash
+cctl init moodle moodle-acme \
+  --domain moodle.acme.example.br \
+  --dest /opt/moodle-acme
+```
 
 ### 2. Instalação (no servidor)
 
 ```bash
-# Clonar a branch do cliente no servidor
-git clone --branch moodle-acme --single-branch <URL_DO_REPO> moodle-acme
-cd moodle-acme
+cd /opt/moodle-acme
 
 # Revisar e ajustar o .env antes de instalar
 vi docker/.env
 
 # Instalar
-./cctl install
+cctl install
 ```
 
 O `install` gera as senhas, aloca uma subnet dedicada, sobe os containers,
@@ -58,14 +86,14 @@ instala os cron jobs e registra o vhost no nginx-proxy.
 ### 3. Operações
 
 ```bash
-./cctl ps               # lista containers e status
-./cctl logs             # últimas 50 linhas de log
-./cctl logs -100        # últimas 100 linhas
-./cctl logs -f          # segue em tempo real
-./cctl connect app      # shell no container da aplicação
-./cctl status           # resumo de saúde do ambiente
-./cctl backup           # executa backup do ambiente
-./cctl update           # pull de imagens e recria containers
+cctl ps               # lista containers e status
+cctl logs             # últimas 50 linhas de log
+cctl logs -100        # últimas 100 linhas
+cctl logs -f          # segue em tempo real
+cctl connect app      # shell no container da aplicação
+cctl status           # resumo de saúde do ambiente
+cctl backup           # executa backup do ambiente
+cctl update           # pull de imagens e recria containers
 ```
 
 ## Referência de comandos
@@ -74,7 +102,7 @@ instala os cron jobs e registra o vhost no nginx-proxy.
 
 | Comando | Descrição |
 |---------|-----------|
-| `init` | Cria branch de cliente a partir de um template |
+| `init <template> <nome>` | Inicializa diretório de projeto a partir de um template |
 | `install` | Instala a instância no servidor |
 | `up` | Cria containers e inicia o ambiente |
 | `down` | Remove containers e rede (mantém volumes) |
@@ -129,7 +157,7 @@ lib/                    # Funções compartilhadas
   network.sh            # Alocação de subnets
   nginx.sh              # Integração com nginx-proxy
 commands/               # Um arquivo por subcomando
-  init.sh               # Cria branch de cliente
+  init.sh               # Inicializa diretório de projeto
   install.sh            # Deploy completo no servidor
   logs.sh               # Exibe logs
   ps.sh                 # Lista containers
@@ -137,18 +165,30 @@ commands/               # Um arquivo por subcomando
 templates/              # Um diretório por tipo de projeto
   moodle/               # Template para Moodle
   dspace/               # Template para DSpace
+docs/
+  TEMPLATE_GUIDE.md     # Como criar um novo template
 ```
 
 ## Detecção de contexto
 
-O cctl detecta automaticamente em qual contexto está sendo executado e exibe
-apenas os comandos disponíveis para aquele contexto:
+O cctl detecta automaticamente onde está sendo executado e exibe apenas os
+comandos disponíveis para aquele contexto:
 
 | Contexto | Condição | Comandos disponíveis |
 |----------|----------|----------------------|
-| Repositório de templates | `templates/` presente | `init` |
-| Branch de cliente (pré-install) | `project.conf` sem `.cctl-instance` | `install` |
+| Repositório cctl | fora de projeto/instância | `init` |
+| Diretório de projeto (pré-install) | `project.conf` presente, sem `.cctl-instance` | `install` |
 | Instância instalada | `.cctl-instance` presente | todos os operacionais |
+
+## Templates disponíveis
+
+| Template | Aplicação | Documentação |
+|----------|-----------|--------------|
+| `moodle` | Moodle LMS | — |
+| `dspace` | DSpace (repositório institucional) | — |
+
+Para criar um novo template (ex: GitLab, WordPress, Nextcloud), consulte
+[docs/TEMPLATE_GUIDE.md](docs/TEMPLATE_GUIDE.md).
 
 ## Decisões técnicas
 
@@ -157,37 +197,38 @@ apenas os comandos disponíveis para aquele contexto:
 O cctl roda em servidores que muitas vezes têm apenas o mínimo instalado.
 Dependências externas viram pré-requisito de instalação — e pré-requisito de
 manutenção. Bash 5 + coreutils cobrem tudo que o cctl precisa: parsing de
-variáveis, manipulação de strings, chamadas a `docker` e `git`. A única
-dependência real é o Docker, que já é o pré-requisito do próprio workload.
+variáveis, manipulação de strings, chamadas a `docker`. A única dependência
+real é o Docker, que já é o pré-requisito do próprio workload.
 
-### Por que uma branch git por cliente?
+### Por que um diretório por projeto em vez de branches git?
 
-Cada cliente tem configurações distintas: domínio, senhas, limites de recurso,
-customizações de aplicação. Uma branch por cliente mantém o histórico de
-mudanças rastreável por cliente, permite rollback granular (`git checkout`),
-e isola merges de atualizações de template — `git merge main` traz melhorias
-do template sem tocar no `.env` do cliente.
+Branches no repositório do cctl exigem que cada usuário faça fork da ferramenta
+para gerenciar seus projetos — o histórico do cliente fica misturado com o
+histórico da ferramenta. Com o modelo de diretório standalone, `cctl init` gera
+um diretório autocontido que o usuário pode ou não versionar, em qualquer
+repositório git que queira. O cctl é apenas a ferramenta; o projeto é do usuário.
 
-A alternativa (um diretório por cliente num monorepo flat) perde o histórico
-de cada um e dificulta aplicar atualizações de forma seletiva.
+### Por que `{{DOUBLE_BRACES}}` nos templates nginx em vez de `$VARIAVEL`?
 
-### Por que `{{DOUBLE_BRACES}}` nos templates em vez de `$VARIAVEL`?
+Templates com `$VAR` exigem `envsubst` e colidem com variáveis do nginx
+(`$host`, `$uri`, `$remote_addr`). `{{DOUBLE_BRACES}}` não colide com shell,
+nginx, nem com outros sistemas de template. A substituição é feita com `sed`,
+tornando cada render explícito e auditável.
 
-Templates com `$VAR` exigem `envsubst` ou avaliação de shell — qualquer
-variável de shell não definida no ambiente produz string vazia silenciosamente.
-`{{DOUBLE_BRACES}}` não colide com variáveis de shell, com configurações do
-nginx (`$host`, `$uri`, `$remote_addr`), nem com sintaxe de outros sistemas de
-template. A substituição é feita com `sed`, tornando cada render explícito e
-auditável.
+### Por que `_PLACEHOLDER_` no `.env.template`?
+
+O arquivo `.env` é lido linha por linha via `read` — sem expansão de shell.
+Placeholders com `_UNDERSCORES_` são visualmente distintos de variáveis reais,
+improváveis de conflitar com valores legítimos, e seguros para substituição
+com `sed`.
 
 ### Por que detecção de contexto em vez de subcomandos fixos?
 
 O mesmo binário `cctl` serve tanto na máquina do desenvolvedor (onde faz sentido
 `init`) quanto no servidor (onde faz sentido `install`, `ps`, `logs`). Expor
 todos os comandos em todos os contextos gera confusão e risco de operação
-errada (`destroy` num branch local, `init` num servidor de produção). A detecção
-automática garante que o operador veja — e possa executar — apenas o que faz
-sentido no ambiente onde está.
+errada. A detecção automática garante que o operador veja — e possa executar —
+apenas o que faz sentido no ambiente onde está.
 
 ## Licença
 

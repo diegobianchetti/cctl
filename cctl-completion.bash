@@ -45,25 +45,35 @@ _cctl_completions() {
     # Completa argumentos especificos por subcomando
     case "${command}" in
         init)
+            # Conta argumentos posicionais ja informados (ignora flags)
+            local pos_count=0
+            local i
+            for (( i=1; i < COMP_CWORD; i++ )); do
+                [[ "${COMP_WORDS[i]}" != --* ]] && (( pos_count++ )) || true
+            done
+
             case "${prev}" in
-                --project)
-                    # Lista templates disponiveis dinamicamente
-                    local cctl_root
-                    cctl_root="$(dirname "$(readlink -f "${COMP_WORDS[0]}")" 2>/dev/null)"
-                    local templates=""
-                    if [[ -d "${cctl_root}/templates" ]]; then
-                        templates="$(ls -1 "${cctl_root}/templates/" 2>/dev/null | tr '\n' ' ')"
-                    else
-                        templates="dspace moodle multi24h"
-                    fi
-                    COMPREPLY=( $(compgen -W "${templates}" -- "${cur}") )
-                    ;;
-                --client|--domain)
-                    # Sem sugestoes para nome/dominio
+                --domain|--dest)
                     COMPREPLY=()
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--project --client --domain" -- "${cur}") )
+                    if (( pos_count == 0 )); then
+                        # Primeiro posicional: tipo de template
+                        local cctl_root
+                        cctl_root="$(dirname "$(readlink -f "${COMP_WORDS[0]}")" 2>/dev/null)"
+                        local templates=""
+                        if [[ -d "${cctl_root}/templates" ]]; then
+                            templates="$(ls -1 "${cctl_root}/templates/" 2>/dev/null | tr '\n' ' ')"
+                        else
+                            templates="dspace moodle"
+                        fi
+                        COMPREPLY=( $(compgen -W "${templates}" -- "${cur}") )
+                    elif (( pos_count == 1 )); then
+                        # Segundo posicional: nome do projeto (sem sugestoes)
+                        COMPREPLY=()
+                    else
+                        COMPREPLY=( $(compgen -W "--domain --dest" -- "${cur}") )
+                    fi
                     ;;
             esac
             ;;

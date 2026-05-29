@@ -25,15 +25,15 @@ core_bootstrap() {
 }
 
 # Detecta o contexto de execucao
-# Seta CCTL_CONTEXT para: "instance", "template", "client_branch" ou "unknown"
+# Seta CCTL_CONTEXT para: "instance", "project", "template" ou "unknown"
 core_detect_context() {
     if [[ -f "./.cctl-instance" ]]; then
         CCTL_CONTEXT="instance"
         CCTL_INSTANCE_DIR="$(pwd)"
+    elif [[ -f "./project.conf" ]]; then
+        CCTL_CONTEXT="project"
     elif [[ -d "${CCTL_ROOT}/templates" ]]; then
         CCTL_CONTEXT="template"
-    elif [[ -f "./project.conf" && ! -f "./.cctl-instance" ]]; then
-        CCTL_CONTEXT="client_branch"
     else
         CCTL_CONTEXT="unknown"
     fi
@@ -60,8 +60,8 @@ core_check_command_context() {
                     ;;
             esac
             ;;
-        client_branch)
-            # Branch de cliente pre-install: apenas install e help
+        project)
+            # Diretorio de projeto pre-install: apenas install e help
             case "${cmd}" in
                 install|help) return 0 ;;
                 *)
@@ -73,10 +73,10 @@ core_check_command_context() {
             ;;
         *)
             case "${cmd}" in
-                help) return 0 ;;
+                init|help) return 0 ;;
                 *)
                     msg_error "Diretorio atual nao e um contexto valido do cctl."
-                    msg_info "Acesse o diretorio do repositorio containers-control ou de uma instancia instalada."
+                    msg_info "Use 'cctl init' para criar um novo projeto ou acesse o diretorio de uma instancia instalada."
                     return 1
                     ;;
             esac
@@ -88,7 +88,7 @@ core_check_command_context() {
 core_load_manifest() {
     local manifest=""
 
-    if [[ "${CCTL_CONTEXT}" == "instance" || "${CCTL_CONTEXT}" == "client_branch" ]]; then
+    if [[ "${CCTL_CONTEXT}" == "instance" || "${CCTL_CONTEXT}" == "project" ]]; then
         manifest="./project.conf"
     fi
 

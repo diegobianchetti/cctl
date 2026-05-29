@@ -1,210 +1,217 @@
 #!/bin/bash
-# commands/init.sh — Prepara branch de cliente a partir de um template (roda local)
+# commands/init.sh — Inicializa diretorio de projeto a partir de um template
 #
-# Uso: cctl init --project <tipo> --client <nome> --domain <dominio>
+# Uso: cctl init <template> <nome> [--domain <dominio>] [--dest <caminho>]
 #
 # Fluxo:
-#   1. Valida que esta na branch main do repo containers-control
-#   2. Valida que o template existe
-#   3. Cria branch <projeto>-<cliente> a partir de main
-#   4. Copia template para a raiz da branch
-#   5. Remove diretorio templates/ da branch
-#   6. Seta dados nao-sensiveis no .env
-#   7. Commit + push
-#   8. Imprime instrucoes para install no servidor
+#   1. Valida template e nome do projeto
+#   2. Solicita destino (prompt interativo ou --dest)
+#   3. Solicita dominio (prompt interativo ou --domain)
+#   4. Cria diretorio e copia template
+#   5. Gera .env e renderiza project.conf com dados nao-sensiveis
+#   6. Gera vhost nginx de referencia (se dominio informado)
 
 cmd_init() {
-    local project_type=""
-    local client_name=""
+    local template_type=""
+    local project_name=""
     local domain_name=""
+    local dest_dir=""
 
-    # Parse argumentos
     while [[ "$#" -gt 0 ]]; do
         case "$1" in
-            --project|--project=*)
-                if [[ "$1" == *=* ]]; then
-                    project_type="${1#*=}"
-                else
-                    shift; project_type="${1:-}"
-                fi
-                ;;
-            --client|--client=*)
-                if [[ "$1" == *=* ]]; then
-                    client_name="${1#*=}"
-                else
-                    shift; client_name="${1:-}"
-                fi
-                ;;
-            --domain|--domain=*)
-                if [[ "$1" == *=* ]]; then
-                    domain_name="${1#*=}"
-                else
-                    shift; domain_name="${1:-}"
-                fi
-                ;;
-            *)
+            --domain)    shift; domain_name="${1:-}" ;;
+            --domain=*)  domain_name="${1#*=}" ;;
+            --dest)      shift; dest_dir="${1:-}" ;;
+            --dest=*)    dest_dir="${1#*=}" ;;
+            --help|-h)   _init_usage; return 0 ;;
+            -*)
                 msg_error "Opcao desconhecida: $1"
                 _init_usage
                 return 1
+                ;;
+            *)
+                if [[ -z "${template_type}" ]]; then
+                    template_type="$1"
+                elif [[ -z "${project_name}" ]]; then
+                    project_name="$1"
+                else
+                    msg_error "Argumento inesperado: $1"
+                    _init_usage
+                    return 1
+                fi
                 ;;
         esac
         shift
     done
 
-    # Valida parametros obrigatorios
-    if [[ -z "${project_type}" || -z "${client_name}" || -z "${domain_name}" ]]; then
-        msg_error "Parametros obrigatorios faltando."
+    if [[ -z "${template_type}" || -z "${project_name}" ]]; then
+        msg_error "Template e nome do projeto sao obrigatorios."
         _init_usage
         return 1
     fi
 
-    local branch_name="${project_type}-${client_name}"
-    local template_dir="${CCTL_ROOT}/templates/${project_type}"
-
-    msg_header "Inicializando instancia: ${branch_name}"
-    echo -e "  Projeto: ${CYAN}${project_type}${RESET}"
-    echo -e "  Cliente: ${CYAN}${client_name}${RESET}"
-    echo -e "  Dominio: ${CYAN}${domain_name}${RESET}"
-    echo ""
-
-    # 1. Valida que esta na branch main
-    _init_check_main_branch || return 1
-
-    # 2. Valida que o template existe
+    local template_dir="${CCTL_ROOT}/templates/${template_type}"
     if [[ ! -d "${template_dir}" ]]; then
-        msg_error "Template '${project_type}' nao encontrado em ${template_dir}"
+        msg_error "Template '${template_type}' nao encontrado."
         msg_info "Templates disponiveis:"
         ls -1 "${CCTL_ROOT}/templates/" 2>/dev/null | sed 's/^/  - /'
         return 1
     fi
 
-    # 3. Valida DNS (aviso, nao bloqueante)
-    validate_dns "${domain_name}" || true
+    msg_header "Inicializando projeto: ${project_name}"
+    echo -e "  Template: ${CYAN}${template_type}${RESET}"
+    echo ""
 
-    # 4. Valida git
-    validate_git || return 1
+    if [[ -z "${dest_dir}" ]]; then
+        _init_ask_dest "${project_name}"
+        dest_dir="${_INIT_DEST}"
+    fi
 
-    # 5. Verifica se a branch ja existe
-    if git show-ref --verify --quiet "refs/heads/${branch_name}" 2>/dev/null; then
-        msg_error "Branch '${branch_name}' ja existe."
-        msg_info "Use 'git branch -D ${branch_name}' para remover se deseja recriar."
+    if [[ -z "${domain_name}" ]]; then
+        _init_ask_domain
+        domain_name="${_INIT_DOMAIN:-}"
+    fi
+
+    if [[ -d "${dest_dir}" ]]; then
+        msg_error "Diretorio ja existe: ${dest_dir}"
+        msg_info "Remova o diretorio ou escolha outro nome/destino."
         return 1
     fi
 
-    # 6. Cria branch a partir de main
-    msg_step "1/5" "Criando branch ${branch_name}..."
-    git checkout -b "${branch_name}" || return 1
-
-    # 7. Copia template para a raiz
-    msg_step "2/5" "Copiando template ${project_type}..."
-    cp -r "${template_dir}"/* . 2>/dev/null || true
-    cp -r "${template_dir}"/.* . 2>/dev/null || true
-
-    # 8. Remove diretorio templates/ (nao precisa no servidor)
-    rm -rf templates/
-
-    # 9. Carrega manifest para pegar ENV_FILE/ENV_TEMPLATE se definidos
-    if [[ -f "./project.conf" ]]; then
-        source "./project.conf"
+    echo ""
+    echo -e "  Destino: ${CYAN}${dest_dir}${RESET}"
+    if [[ -n "${domain_name}" ]]; then
+        echo -e "  Dominio: ${CYAN}${domain_name}${RESET}"
+    else
+        echo -e "  Dominio: ${DIM}(definir depois no .env)${RESET}"
     fi
+    echo ""
 
-    # Resolve paths do .env
-    local env_file
-    env_file="./${ENV_FILE:-.env}"
-    local env_template="${ENV_TEMPLATE:-.env.template}"
+    # 1. Cria diretorio e copia template
+    msg_step "1/3" "Copiando template ${template_type}..."
+    mkdir -p "${dest_dir}"
+    cp -r "${template_dir}"/. "${dest_dir}/"
+    log_success "Template copiado para ${dest_dir}"
 
-    msg_step "3/5" "Configurando .env..."
+    # 2. Configura .env e project.conf
+    msg_step "2/3" "Configurando .env e project.conf..."
 
-    # Procura o template do .env (pode estar em subdir)
-    if [[ -f "./${env_template}" ]]; then
+    local env_file_rel env_template_rel
+    env_file_rel=$(bash -c "source '${dest_dir}/project.conf' 2>/dev/null; echo \"\${ENV_FILE:-docker/.env}\"")
+    env_template_rel=$(bash -c "source '${dest_dir}/project.conf' 2>/dev/null; echo \"\${ENV_TEMPLATE:-docker/.env.template}\"")
+
+    local env_file="${dest_dir}/${env_file_rel}"
+    local env_template="${dest_dir}/${env_template_rel}"
+
+    if [[ -f "${env_template}" ]]; then
         mkdir -p "$(dirname "${env_file}")"
-        cp "./${env_template}" "${env_file}"
-        rm -f "./${env_template}"
-    elif [[ ! -f "${env_file}" ]]; then
-        mkdir -p "$(dirname "${env_file}")"
-        touch "${env_file}"
+        cp "${env_template}" "${env_file}"
     fi
 
-    # Seta variaveis nao-sensiveis
-    env_set_var "CLIENT_NAME" "${client_name}"
-    env_set_var "DOMAIN_NAME" "${domain_name}"
-    env_set_var "COMPOSE_PROJECT_NAME" "${branch_name}"
+    _init_render_placeholders "${env_file}" "${project_name}" "${domain_name}"
+    _init_render_placeholders "${dest_dir}/project.conf" "${project_name}" "${domain_name}"
 
-    # Renderiza placeholders no project.conf
-    if [[ -f "./project.conf" ]]; then
-        sed -i \
-            -e "s|_CLIENT_NAME_|${client_name}|g" \
-            -e "s|_DOMAIN_NAME_|${domain_name}|g" \
-            -e "s|_COMPOSE_PROJECT_NAME_|${branch_name}|g" \
-            "./project.conf"
-        log_success "project.conf renderizado"
-    fi
+    log_success ".env e project.conf configurados"
 
-    # Renderiza vhost nginx — gera <branch>.conf para referencia/deploy manual
-    # site.conf.template e mantido para que cctl install possa renderiza-lo no servidor
-    if [[ -f "./nginx/site.conf.template" ]]; then
+    # 3. Gera vhost de referencia (so se dominio informado)
+    msg_step "3/3" "Gerando vhost de referencia..."
+    if [[ -n "${domain_name}" && -f "${dest_dir}/nginx/site.conf.template" ]]; then
         sed \
             -e "s|{{DOMAIN_NAME}}|${domain_name}|g" \
-            -e "s|{{COMPOSE_PROJECT_NAME}}|${branch_name}|g" \
-            "./nginx/site.conf.template" > "./nginx/${branch_name}.conf"
-        log_success "Vhost nginx gerado: nginx/${branch_name}.conf"
-    fi
-
-    # 10. Commit
-    msg_step "4/5" "Commit..."
-    git add -A
-    git commit -m "init: ${branch_name} (${project_type} para ${client_name})"
-
-    # 11. Push (se remote configurado)
-    msg_step "5/5" "Push..."
-    if git remote get-url origin &>/dev/null; then
-        if git push -u origin "${branch_name}" 2>/dev/null; then
-            log_success "Branch ${branch_name} enviada para o remote"
-        else
-            log_warn "Push falhou (sem credenciais ou remote inacessivel)."
-            log_warn "Execute manualmente: git push -u origin ${branch_name}"
-        fi
+            -e "s|{{COMPOSE_PROJECT_NAME}}|${project_name}|g" \
+            "${dest_dir}/nginx/site.conf.template" \
+            > "${dest_dir}/nginx/${project_name}.conf"
+        log_success "Vhost gerado: nginx/${project_name}.conf"
     else
-        log_warn "Nenhum remote configurado. Push sera necessario manualmente."
+        log_debug "Vhost pulado (sem dominio ou sem site.conf.template)"
     fi
 
-    # Instrucoes para o install
     echo ""
-    msg_header "Proximo passo: instalar no servidor"
+    msg_header "Projeto inicializado!"
     echo ""
-
-    local repo_url
-    repo_url=$(git remote get-url origin 2>/dev/null || echo "<URL_DO_REPOSITORIO>")
-
-    echo -e "  ${DIM}# No servidor:${RESET}"
-    echo -e "  cd /var/docker"
-    echo -e "  git clone --branch ${branch_name} --single-branch ${repo_url} ${branch_name}"
-    echo -e "  cd ${branch_name}"
-    echo -e "  cctl install"
+    echo -e "  Diretorio: ${CYAN}${dest_dir}${RESET}"
     echo ""
-
-    log_success "Init concluido para ${branch_name}!"
+    if [[ -z "${domain_name}" ]]; then
+        msg_warn "DOMAIN_NAME nao definido — edite ${env_file_rel} antes de instalar."
+        echo ""
+    fi
+    echo -e "  Proximo passo:"
+    echo -e "    ${DIM}cd ${dest_dir}${RESET}"
+    echo -e "    ${DIM}vi ${env_file_rel}${RESET}"
+    echo -e "    ${DIM}cctl install${RESET}"
+    echo ""
+    log_success "Init concluido para ${project_name}!"
 }
 
-_init_check_main_branch() {
-    local current_branch
-    current_branch=$(git branch --show-current 2>/dev/null)
+# Substitui _PLACEHOLDER_ no .env e project.conf
+_init_render_placeholders() {
+    local file="$1"
+    local project_name="$2"
+    local domain_name="$3"
 
-    if [[ "${current_branch}" != "main" && "${current_branch}" != "master" ]]; then
-        msg_error "Voce deve estar na branch 'main' para executar init."
-        msg_info "Branch atual: ${current_branch}"
-        msg_info "Execute: git checkout main"
-        return 1
+    [[ -f "${file}" ]] || return 0
+
+    sed -i \
+        -e "s|_CLIENT_NAME_|${project_name}|g" \
+        -e "s|_COMPOSE_PROJECT_NAME_|${project_name}|g" \
+        "${file}"
+
+    if [[ -n "${domain_name}" ]]; then
+        sed -i -e "s|_DOMAIN_NAME_|${domain_name}|g" "${file}"
     fi
-    return 0
+}
+
+_init_ask_dest() {
+    local project_name="$1"
+    local opt1
+    opt1="$(pwd)/${project_name}"
+    local opt2="/opt/${project_name}"
+
+    echo -e "${BOLD}Onde criar o diretorio do projeto?${RESET}"
+    echo ""
+    echo -e "  ${CYAN}1)${RESET} ${opt1}"
+    echo -e "     (diretorio atual)"
+    echo -e "  ${CYAN}2)${RESET} ${opt2}"
+    echo -e "     (recomendado para producao)"
+    echo -e "  ${CYAN}3)${RESET} Outro caminho"
+    echo ""
+    local choice
+    read -rp "  Escolha [1]: " choice
+    choice="${choice:-1}"
+
+    case "${choice}" in
+        1) _INIT_DEST="${opt1}" ;;
+        2) _INIT_DEST="${opt2}" ;;
+        3)
+            echo ""
+            read -rp "  Caminho completo: " _INIT_DEST
+            _INIT_DEST="${_INIT_DEST%/}"
+            ;;
+        *) _INIT_DEST="${choice}" ;;
+    esac
+    echo ""
+}
+
+_init_ask_domain() {
+    read -rp "  Dominio (Enter para definir depois no .env): " _INIT_DOMAIN
 }
 
 _init_usage() {
     echo ""
-    echo "Uso: cctl init --project <tipo> --client <nome> --domain <dominio>"
+    echo "Uso: cctl init <template> <nome> [--domain <dominio>] [--dest <caminho>]"
     echo ""
-    echo "Exemplo:"
-    echo "  cctl init --project dspace --client oogway --domain repositorio.oogway.com.br"
+    echo "Argumentos:"
+    echo "  <template>          Tipo de projeto (ex: moodle, dspace)"
+    echo "  <nome>              Nome unico do projeto (ex: moodle-acme)"
+    echo ""
+    echo "Opcoes:"
+    echo "  --domain <dominio>  Dominio da instancia (ex: moodle.acme.example.br)"
+    echo "  --dest <caminho>    Diretorio de destino completo (prompt se omitido)"
+    echo ""
+    echo "Exemplos:"
+    echo "  cctl init moodle moodle-acme"
+    echo "  cctl init moodle moodle-acme --domain moodle.acme.example.br"
+    echo "  cctl init moodle moodle-acme --domain moodle.acme.example.br --dest /opt/moodle-acme"
     echo ""
     echo "Templates disponiveis:"
     ls -1 "${CCTL_ROOT}/templates/" 2>/dev/null | sed 's/^/  - /' || echo "  (nenhum)"
