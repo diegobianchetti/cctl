@@ -10,8 +10,8 @@ cmd_help() {
         template)
             _help_template_commands
             ;;
-        client_branch)
-            _help_client_branch_commands
+        project)
+            _help_project_commands
             ;;
         instance)
             _help_instance_commands
@@ -30,12 +30,12 @@ cmd_help() {
 
 _help_template_commands() {
     echo -e "${BOLD}Comandos disponiveis (repositorio de templates):${RESET}"
-    echo "  init                Cria branch de cliente a partir de um template"
-    echo "  help                Exibe esta ajuda"
+    echo "  init <template> <nome>  Inicializa diretorio de projeto a partir de um template"
+    echo "  help                    Exibe esta ajuda"
 }
 
-_help_client_branch_commands() {
-    echo -e "${BOLD}Comandos disponiveis (branch de cliente — pre-install):${RESET}"
+_help_project_commands() {
+    echo -e "${BOLD}Comandos disponiveis (diretorio de projeto — pre-install):${RESET}"
     echo "  install             Instala a instancia no servidor"
     echo "  help                Exibe esta ajuda"
 }
@@ -81,9 +81,9 @@ _help_instance_commands() {
 
 _help_all_commands() {
     echo -e "${BOLD}Comandos:${RESET}"
-    echo "  init                Cria branch de cliente a partir de um template"
-    echo "  install             Instala a instancia no servidor"
-    echo "  help                Exibe esta ajuda"
+    echo "  init <template> <nome>  Inicializa diretorio de projeto a partir de um template"
+    echo "  install                 Instala a instancia no servidor"
+    echo "  help                    Exibe esta ajuda"
     echo ""
-    echo -e "${DIM}Execute 'cctl help' dentro do diretorio do repositorio ou de uma instancia para ver todos os comandos.${RESET}"
+    echo -e "${DIM}Execute 'cctl help' dentro do diretorio de um projeto ou de uma instancia instalada para ver todos os comandos.${RESET}"
 }
