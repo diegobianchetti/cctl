@@ -41,6 +41,15 @@ core_parse_global_args "$@"
 # Detecta contexto
 core_detect_context
 
+# Dica de autocomplete (somente no contexto local, nao no servidor)
+if [[ "${CCTL_CONTEXT:-}" == "template" ]]; then
+    if ! declare -f _cctl_completions &>/dev/null; then
+        echo "[DICA] Autocomplete nao ativo. Para ativar, adicione ao ~/.bashrc:" >&2
+        echo "  source ${CCTL_ROOT}/cctl-completion.bash" >&2
+        echo "" >&2
+    fi
+fi
+
 # Verifica se o comando e valido para o contexto
 core_check_command_context "${CCTL_COMMAND}" || exit 1
 
