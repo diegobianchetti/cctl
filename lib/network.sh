@@ -70,22 +70,24 @@ network_show_details() {
     done
 }
 
-# Conecta o container nginx a rede do projeto
+# Conecta o container nginx-proxy a rede do projeto
 network_connect_nginx() {
     local project_network="$1"
+    local container="${NGINX_CONTAINER_NAME:-nginx-proxy}"
 
-    if docker network connect "${project_network}" nginx 2>/dev/null; then
+    if docker network connect "${project_network}" "${container}" 2>/dev/null; then
         log_success "Nginx conectado a rede ${project_network}"
     else
-        log_warn "Nao foi possivel conectar nginx a rede ${project_network} (ja conectado ou nginx inexistente)"
+        log_warn "Nao foi possivel conectar nginx a rede ${project_network} (ja conectado ou container inexistente)"
     fi
 }
 
-# Desconecta o container nginx da rede do projeto
+# Desconecta o container nginx-proxy da rede do projeto
 network_disconnect_nginx() {
     local project_network="$1"
+    local container="${NGINX_CONTAINER_NAME:-nginx-proxy}"
 
-    if docker network disconnect "${project_network}" nginx 2>/dev/null; then
+    if docker network disconnect "${project_network}" "${container}" 2>/dev/null; then
         log_success "Nginx desconectado da rede ${project_network}"
     else
         log_warn "Nginx nao estava conectado a rede ${project_network}"
