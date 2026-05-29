@@ -7,7 +7,8 @@ passwords_generate() {
     local length="${1:-32}"
 
     # Usa /dev/urandom com caracteres alfanumericos + simbolos seguros
-    tr -dc 'A-Za-z0-9!@#%^&*_-' < /dev/urandom | head -c "${length}" || true
+    # Excluidos: & (especial em sed replacement), ^ e ! (especiais em bash history/regex)
+    tr -dc 'A-Za-z0-9@#%*_-' < /dev/urandom | head -c "${length}" || true
 }
 
 # Gera e injeta senhas para todas as variaveis em AUTO_PASSWORD_VARS do manifest
