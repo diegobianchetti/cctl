@@ -140,13 +140,13 @@ cmd_init() {
         log_success "project.conf renderizado"
     fi
 
-    # Renderiza vhost nginx
+    # Renderiza vhost nginx — gera <branch>.conf para referencia/deploy manual
+    # site.conf.template e mantido para que cctl install possa renderiza-lo no servidor
     if [[ -f "./nginx/site.conf.template" ]]; then
         sed \
             -e "s|{{DOMAIN_NAME}}|${domain_name}|g" \
             -e "s|{{COMPOSE_PROJECT_NAME}}|${branch_name}|g" \
             "./nginx/site.conf.template" > "./nginx/${branch_name}.conf"
-        rm -f "./nginx/site.conf.template"
         log_success "Vhost nginx gerado: nginx/${branch_name}.conf"
     fi
 

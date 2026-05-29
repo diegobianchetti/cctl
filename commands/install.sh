@@ -124,34 +124,9 @@ _install_nginx() {
     fi
 
     msg_step "NGINX" "Configurando Nginx..."
+    nginx_enable_site || return 1
 
-    local nginx_conf_src="./nginx/site.conf"
-    local site_available="/var/docker/nginx/config/sites-available/${DOMAIN_NAME}.conf"
-    local site_enabled="/var/docker/nginx/config/sites-enabled/${DOMAIN_NAME}.conf"
-
-    if [[ ! -f "${nginx_conf_src}" ]]; then
-        log_warn "Config nginx nao encontrada em ${nginx_conf_src}, pulando"
-        return 0
-    fi
-
-    # Copia config para sites-available
-    sudo cp "${nginx_conf_src}" "${site_available}"
-
-    # Cria symlink em sites-enabled
-    sudo ln -sf "${site_available}" "${site_enabled}"
-
-    # Testa e recarrega nginx
-    if docker compose -p nginx exec nginx nginx -t 2>/dev/null; then
-        docker compose -p nginx exec nginx nginx -s reload
-        log_success "Nginx configurado e recarregado para ${DOMAIN_NAME}"
-    else
-        log_error "Configuracao nginx invalida! Verifique: ${site_available}"
-        # Reverte
-        sudo rm -f "${site_enabled}"
-        return 1
-    fi
-
-    # Conecta nginx a rede do projeto
+    # Conecta nginx-proxy a rede do projeto para acessar o container da aplicacao
     local project_network
     project_network=$(docker network ls --filter "name=${COMPOSE_PROJECT_NAME}" --format "{{.Name}}" | head -1)
     if [[ -n "${project_network}" ]]; then
