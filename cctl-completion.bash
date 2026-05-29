@@ -71,10 +71,12 @@ _cctl_completions() {
             # Sugere servicos do CONNECTABLE_SERVICES se project.conf existir
             local services
             services=$(_cctl_get_services)
+            # -N: atalho para --tail N (ex: -50, -100, -200)
+            local log_opts="-f -50 -100 -200 --tail --no-color"
             if [[ -n "${services}" ]]; then
-                COMPREPLY=( $(compgen -W "${services} -f --tail --no-color" -- "${cur}") )
+                COMPREPLY=( $(compgen -W "${services} ${log_opts}" -- "${cur}") )
             else
-                COMPREPLY=( $(compgen -W "-f --tail --no-color" -- "${cur}") )
+                COMPREPLY=( $(compgen -W "${log_opts}" -- "${cur}") )
             fi
             ;;
 
