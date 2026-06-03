@@ -45,7 +45,16 @@ cctl init moodle moodle-acme
 ```
 
 O comando solicita o diretório de destino (sugerindo `$(pwd)/moodle-acme/` e
-`/opt/moodle-acme/`) e o domínio, depois gera o projeto com tudo preenchido:
+`/opt/moodle-acme/`) e o domínio, depois gera o projeto com tudo preenchido.
+
+> **Nota:** o destino `/opt/<nome>` é recomendado para servidores onde o usuário
+> tem permissão de escrita no diretório. Para criar em `/opt`, pré-crie o diretório
+> com as permissões corretas antes de rodar o `init`:
+> ```bash
+> sudo mkdir -p /opt/moodle-acme
+> sudo chown "$USER:$USER" /opt/moodle-acme
+> ```
+> Alternativamente, use `--dest "$HOME/moodle-acme"` para instalar no diretório do usuário.
 
 ```
 /opt/moodle-acme/
