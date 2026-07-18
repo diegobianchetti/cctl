@@ -105,6 +105,108 @@ cctl backup           # executa backup do ambiente
 cctl update           # pull de imagens e recria containers
 ```
 
+## Ambiente completo de teste/homologação
+
+Passo a passo pra reproduzir uma instalação do zero — VM limpa até aplicação acessível
+no browser. Útil pra homologar um template novo ou validar uma alteração no cctl.
+
+### 1. Provisionar a VM
+
+```bash
+git clone https://github.com/diegobianchetti/vagrant-libvirt-lab.git
+cd vagrant-libvirt-lab
+vagrant plugin install vagrant-libvirt
+vagrant up
+```
+
+Descubra o IP da VM (necessário nos próximos passos):
+
+```bash
+virsh domifaddr $(virsh list --all --name | grep lab)
+```
+
+### 2. Instalar o Docker na VM
+
+```bash
+git clone https://github.com/diegobianchetti/ansible-docker-setup.git
+cd ansible-docker-setup
+
+# Aponte um inventory para o IP da VM (usuário vagrant, chave privada do Vagrant)
+# e adicione o usuário 'vagrant' ao grupo docker:
+ansible-playbook -i <seu-inventory>.yml playbooks/docker-setup.yml \
+  -e '{"docker_users": ["vagrant"]}'
+```
+
+Sem isso, `docker` só funciona com `sudo` dentro da VM.
+
+### 3. Subir o nginx-proxy na VM
+
+Dentro da VM (`vagrant ssh`):
+
+```bash
+sudo mkdir -p /etc/nginx-proxy/vhosts.d
+git clone https://github.com/diegobianchetti/nginx-proxy.git /opt/nginx-proxy
+cd /opt/nginx-proxy
+cp .env.example .env
+docker compose up -d
+```
+
+Valide o catch-all antes de seguir — `curl http://localhost` deve fechar a conexão
+sem resposta (`return 444`), sinal de que o proxy está de pé e sem vhosts ainda.
+
+### 4. Clonar e disponibilizar o cctl
+
+Ainda dentro da VM:
+
+```bash
+git clone https://github.com/diegobianchetti/cctl.git
+cd cctl
+sudo ln -s "$(pwd)/cctl" /usr/local/bin/cctl
+source cctl-completion.bash
+```
+
+### 5. Inicializar e instalar o projeto
+
+```bash
+cctl init moodle moodle-acme
+```
+
+Responda aos prompts: opção `1` cria no diretório atual, e informe um domínio.
+
+> **Importante para ambiente de lab/teste:** o domínio precisa terminar em `.local`
+> ou `.test` (ex.: `moodle-acme.local`) — `cctl install` valida resolução de DNS do
+> domínio informado e domínios sem DNS real (incluindo os exemplos fictícios
+> `*.example.br` usados no resto desta documentação) falham nessa checagem.
+
+```bash
+cd moodle-acme
+vi docker/.env        # revise MOODLE_SSL=false se não houver certificado real
+cctl install
+```
+
+### 6. Validar o acesso
+
+Dentro da VM:
+
+```bash
+curl -H "Host: moodle-acme.local" http://localhost
+```
+
+Da sua máquina local, adicione o IP da VM ao `/etc/hosts` e acesse pelo browser:
+
+```bash
+echo "<IP-da-VM> moodle-acme.local" | sudo tee -a /etc/hosts
+```
+
+Depois abra `http://moodle-acme.local` — o mesmo domínio configurado no passo 5.
+
+### 7. Encerrar o lab
+
+```bash
+# No host, dentro de vagrant-libvirt-lab/
+vagrant destroy -f
+```
+
 ## Referência de comandos
 
 ### Ciclo de vida
