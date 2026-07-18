@@ -18,7 +18,7 @@ services:
       DSPACE_REST_HOST: ${DOMAIN_NAME}
       DSPACE_REST_PORT: 443
       DSPACE_REST_NAMESPACE: /server
-    image: "${DOCKER_OWNER}/dspace-angular-runtime:${DSPACE_VER}"
+    image: "${DOCKER_OWNER}/dspace-angular:${DSPACE_VER}"
     depends_on:
       - dspace
     volumes:
