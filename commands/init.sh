@@ -176,19 +176,25 @@ _init_ask_dest() {
     echo -e "  ${CYAN}3)${RESET} Outro caminho"
     echo ""
     local choice
-    read -rp "  Escolha [1]: " choice
-    choice="${choice:-1}"
+    while true; do
+        read -rp "  Escolha [1]: " choice
+        choice="${choice:-1}"
 
-    case "${choice}" in
-        1) _INIT_DEST="${opt1}" ;;
-        2) _INIT_DEST="${opt2}" ;;
-        3)
-            echo ""
-            read -rp "  Caminho completo: " _INIT_DEST
-            _INIT_DEST="${_INIT_DEST%/}"
-            ;;
-        *) _INIT_DEST="${choice}" ;;
-    esac
+        case "${choice}" in
+            1) _INIT_DEST="${opt1}"; break ;;
+            2) _INIT_DEST="${opt2}"; break ;;
+            3)
+                echo ""
+                read -rp "  Caminho completo: " _INIT_DEST
+                _INIT_DEST="${_INIT_DEST%/}"
+                break
+                ;;
+            *)
+                msg_error "Opcao invalida: '${choice}'. Escolha 1, 2 ou 3."
+                echo ""
+                ;;
+        esac
+    done
     echo ""
 }
 
