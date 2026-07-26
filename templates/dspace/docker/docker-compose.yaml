@@ -15,8 +15,8 @@ services:
     restart: always
     environment:
       dspace__P__dir: /dspace
-      dspace__P__server__P__url: https://${DOMAIN_NAME}/server
-      dspace__P__ui__P__url: https://${DOMAIN_NAME}
+      dspace__P__server__P__url: ${DSPACE_PROTOCOL}://${DOMAIN_NAME}/server
+      dspace__P__ui__P__url: ${DSPACE_PROTOCOL}://${DOMAIN_NAME}
       dspace__P__name: ${DSPACE_DISPLAY_NAME}
       db__P__url: 'jdbc:postgresql://dspacedb:5432/dspace'
       solr__P__server: http://dspacesolr:8983/solr
@@ -37,9 +37,6 @@ services:
     tty: true
     volumes:
       - assetstore:/dspace/assetstore
-      - ./dspace/config:/dspace/config
-      - ../custom-config/dspace/etc/GeoIP.conf:/etc/GeoIP.conf
-      - geoip_data:/usr/share/GeoIP
       - backend_logs:/dspace/log
     entrypoint:
       - /bin/bash
@@ -71,7 +68,6 @@ services:
     volumes:
       - pgdata:/pgdata
       - db_backup:/var/backups
-      - ../custom-config/db/scripts:/scripts
 
   # DSpace Solr container
   dspacesolr:
@@ -98,7 +94,6 @@ services:
     volumes:
       - solr_data:/var/solr/data
       - solr_logs:/var/solr/logs
-      - ../custom-config/solr/log4j2.xml:/var/solr/log4j2.xml
     user: root
     entrypoint:
       - /bin/bash
@@ -127,4 +122,3 @@ volumes:
   solr_logs:
   db_backup:
   backend_logs:
-  geoip_data:

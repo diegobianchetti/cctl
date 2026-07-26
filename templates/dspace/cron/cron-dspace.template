@@ -1,15 +1,8 @@
-# cron-dspace — Cron jobs para DSpace (gerenciado pelo cctl)
+# cron-dspace — Cron jobs para DSpace (ambiente dev/teste)
 # Instalado em /etc/cron.d/cron-{{COMPOSE_PROJECT_NAME}}
-
-# Backup do banco de dados (12h e 02h)
-0 12 * * * root /usr/bin/docker exec {{COMPOSE_PROJECT_NAME}}-dspacedb bash -c "bash /scripts/backup-DB-dspace.sh" > /var/log/cron-backup-pgsql-{{COMPOSE_PROJECT_NAME}}.day.last.log 2>&1
-0 02 * * * root /usr/bin/docker exec {{COMPOSE_PROJECT_NAME}}-dspacedb bash -c "bash /scripts/backup-DB-dspace.sh" > /var/log/cron-backup-pgsql-{{COMPOSE_PROJECT_NAME}}.night.last.log 2>&1
 
 # Geracao de thumbnails (a cada hora)
 0 * * * * root /usr/bin/docker exec {{COMPOSE_PROJECT_NAME}}-dspace bash -c "/dspace/bin/dspace filter-media" > /dev/null 2>&1
-
-# Atualizacao GeoIP (semanalmente, domingo)
-0 12 * * 0 root /usr/bin/docker exec {{COMPOSE_PROJECT_NAME}}-dspace bash -c "/usr/bin/geoipupdate" > /dev/null 2>&1
 
 # Importacao OAI (a cada 2 horas)
 0 */2 * * * root /usr/bin/docker exec {{COMPOSE_PROJECT_NAME}}-dspace bash -c "/dspace/bin/dspace oai import" > /dev/null 2>&1

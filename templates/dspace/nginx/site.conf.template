@@ -1,101 +1,53 @@
 server {
-    server_name ${DOMAIN_NAME};
+	listen 80;
+	listen [::]:80;
+	server_name {{DOMAIN_NAME}};
 
-    # BLOCK SQL INJECT
-    include /etc/nginx/conf.d/*;
-    # Logs
-    access_log /var/log/nginx/access-${DOMAIN_NAME}.log;
-    error_log /var/log/nginx/error-${DOMAIN_NAME}.log;
+	if ($block_uri_pattern) { return 444; }
+	if ($block_ip)          { return 444; }
 
-    # Resolver com suporte a cache curto
-    resolver 10.89.0.1 valid=10s;
+	include /etc/nginx/conf.d/error-pages.conf;
 
-    # -------------------------------------------------------
-    # BLOQUEIO DE BOTS AGRESSIVOS
-    # -------------------------------------------------------
-    if ($http_user_agent ~* "(meta-externalagent|SemrushBot|MJ12bot|AwarioBot|Sogou|PetalBot|ChatGPT-User|ClaudeBot|GPTBot|Google-Extended|Bytespider|DotBot|AhrefsBot)") {
-        return 403;
-    }
-    # -------------------------------------------------------
-    # Bloquear scans de PHP/WordPress/scripts maliciosos
-    # -------------------------------------------------------
-    location ~* \.(php|asp|aspx|jsp|cgi)$ {
-        return 444;
-        access_log off;
-    }
+	resolver 127.0.0.11;
 
-    location ~* ^/(wp-includes|wp-content|wp-admin|wordpress|xmlrpc) {
-        return 444;
-        access_log off;
-    }
-    # -------------------------------------------------------
-    # HEALTHCHECK - Uptime Kuma deve monitorar esta URL
-    # Resposta instantanea sem acionar SSR nem REST API
-    # -------------------------------------------------------
-    location = /health-check {
-        return 200 "OK";
-        add_header Content-Type text/plain;
-        access_log off;
-    }
-    # -------------------------------------------------------
+	location /server {
+		set $target dspace:8080;
+		proxy_pass http://$target;
 
-    location /server {
-        # Variavel para evitar erro de boot se o container estiver offline
-        set $backend_upstream ${COMPOSE_PROJECT_NAME}-dspace;
-        proxy_pass http://$backend_upstream:8080;
+		proxy_set_header        Host                    $http_host;
+		proxy_set_header        X-Real-IP               $remote_addr;
+		proxy_set_header        X-Forwarded-Host        $host;
+		proxy_set_header        X-Forwarded-Server      $host;
+		proxy_set_header        X-Forwarded-For         $proxy_add_x_forwarded_for;
+		proxy_set_header        X-Forwarded-Proto       http;
 
-        # Headers obrigatorios para DSpace 7/8/9
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Server $host;
+		proxy_cookie_path       / "/; HttpOnly; SameSite=Lax";
 
-        # Cookies: Lax para garantir que o cookie de sessao sobreviva ao redirecionamento interno do Angular
-        proxy_cookie_path / "/; secure; HttpOnly; SameSite=Lax";
-        proxy_redirect off;
+		client_max_body_size    150M;
+		proxy_read_timeout      60m;
+		proxy_connect_timeout   60m;
+		proxy_send_timeout      60m;
+	}
 
-        # Repasse de Headers de Origem (POST do Agreement)
-        proxy_set_header Origin $http_origin;
-        proxy_set_header Referer $http_referer;
+	location / {
+		set $target dspace-angular:4000;
+		proxy_pass http://$target;
 
-        # body size
-        client_max_body_size 150M;
+		proxy_set_header        Host                    $http_host;
+		proxy_set_header        X-Real-IP               $remote_addr;
+		proxy_set_header        X-Forwarded-Host        $host;
+		proxy_set_header        X-Forwarded-Server      $host;
+		proxy_set_header        X-Forwarded-For         $proxy_add_x_forwarded_for;
+		proxy_set_header        X-Forwarded-Proto       http;
 
-        # Buffers ajustados para concorrencia
-        proxy_buffer_size 512k;
-        proxy_buffers 8 256k;
-        proxy_busy_buffers_size 1024k;
+		proxy_cookie_path       / "/; HttpOnly; SameSite=Lax";
 
-        # Timeouts
-        proxy_connect_timeout 15s;
-        proxy_read_timeout 30s;
-        proxy_send_timeout 60s;
-    }
+		client_max_body_size    150M;
+		proxy_read_timeout      60m;
+		proxy_connect_timeout   60m;
+		proxy_send_timeout      60m;
+	}
 
-    location / {
-        set $frontend_upstream ${COMPOSE_PROJECT_NAME}-dspace-angular;
-        proxy_pass http://$frontend_upstream:4000;
-
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Server $host;
-
-        # body size
-        client_max_body_size 150M;
-
-        # Buffers ajustados para concorrencia
-        proxy_buffer_size 512k;
-        proxy_buffers 8 256k;
-        proxy_busy_buffers_size 1024k;
-
-        # Timeouts
-        proxy_connect_timeout 15s;
-        proxy_read_timeout 30s;
-        proxy_send_timeout 60s;
-    }
+	access_log  /var/log/nginx/{{COMPOSE_PROJECT_NAME}}-access-dspace.log;
+	error_log   /var/log/nginx/{{COMPOSE_PROJECT_NAME}}-error-dspace.log;
 }
