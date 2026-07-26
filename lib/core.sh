@@ -93,8 +93,10 @@ core_load_manifest() {
     fi
 
     if [[ -n "${manifest}" && -f "${manifest}" ]]; then
+        set -a
         # shellcheck source=/dev/null
         source "${manifest}"
+        set +a
         log_debug "Manifest carregado: ${manifest} (PROJECT_TYPE=${PROJECT_TYPE:-?})"
     fi
 }
