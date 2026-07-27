@@ -74,8 +74,10 @@ network_show_details() {
 network_connect_nginx() {
     local project_network="$1"
     local container="${NGINX_CONTAINER_NAME:-nginx-proxy}"
+    local alias_args=()
+    [[ -n "${DOMAIN_NAME:-}" ]] && alias_args=(--alias "${DOMAIN_NAME}")
 
-    if docker network connect "${project_network}" "${container}" 2>/dev/null; then
+    if docker network connect "${alias_args[@]}" "${project_network}" "${container}" 2>/dev/null; then
         log_success "Nginx conectado a rede ${project_network}"
     else
         log_warn "Nao foi possivel conectar nginx a rede ${project_network} (ja conectado ou container inexistente)"
