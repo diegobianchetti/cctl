@@ -5,7 +5,35 @@ Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/),
 e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
-## [Unreleased] - 2026-09-12 (Sprint 3 - Gauntlet Loop)
+## [Unreleased] - 2026-09-12 (Sprint 4 - Gauntlet Loop)
+
+### Adicionado
+- **Ciclo completo de `cctl build` (`commands/build.sh`)**:
+  - Build de todas as imagens com `build:` do compose (comportamento anterior preservado) ou de servicos especificos, com validacao previa via `compose_service_exists` (erro claro listando servicos disponiveis para nome invalido, sem chamar o Docker).
+  - Flags `--no-cache` e `--pull` repassadas ao `docker compose build`.
+  - `-t`/`--tag <tag>`: retagueia as imagens construidas via `docker tag` com referencia sanitizada (minusculas) montada por `registry_image_ref`.
+  - `--custom <servico>`: build de Dockerfile customizado do projeto fora do compose, convencao `docker/custom/<servico>/Dockerfile` (override via `CUSTOM_BUILD_DIR`).
+  - `--push [--registry <url>]`: publica as imagens construidas/taggeadas apos build bem-sucedido.
+  - `--help`/`-h` e erro de uso sintetico para flags invalidas.
+- **`lib/registry.sh` (novo)** — ciclo de autenticacao e push:
+  - `registry_login`: `docker login --password-stdin` lendo token de `CCTL_REGISTRY_TOKEN`/`GHCR_TOKEN`/`DOCKER_TOKEN` — token nunca passa por argumento de linha de comando nem e logado; sem token no ambiente, reaproveita sessao existente em `~/.docker/config.json` ou falha com erro claro (nunca tenta login as cegas).
+  - `registry_image_ref`: monta a referencia completa da imagem (`${registry}/${projeto}-${servico}:${tag}`), sanitizada em minusculas.
+  - `registry_push` e `registry_logout`.
+  - `core_bootstrap` (`lib/core.sh`) atualizado para carregar a nova lib.
+- **Helpers em `lib/compose.sh`**: `compose_service_exists`, `compose_list_services`, `compose_service_image` (resolucao da imagem efetiva pos-build) e `compose_build_service` (build de servicos especificos); `compose_build` existente passou a checar retorno e propagar erro.
+- **`CUSTOM_BUILD_DIR`** documentado em `cctl.conf` (default `docker/custom`).
+- **Bateria de Testes Bats (`tests/build.bats`, novo)**: cobre build sem args, build de servico especifico, servico inexistente, `--no-cache`/`--pull`, `--tag` (sanitizacao), `--custom` (Dockerfile presente/ausente), `--push` (login+push na ordem correta, falha sem credenciais/sessao), `registry_image_ref`, propagacao de falha de `docker compose build`, e um teste dedicado de seguranca garantindo que o token nunca aparece nos argumentos/log do `docker login`.
+- Documentacao atualizada: `docs/USAGE.md` (secao de customizacao/build e referencia de comandos), `docs/TEMPLATE_GUIDE.md` (convencao `docker/custom/<servico>/Dockerfile`), `commands/help.sh` e `cctl-completion.bash` (flags do `build`).
+
+### Limitações conhecidas
+- `compose_buildable_services` identifica serviços buildáveis por heurística de indentação sobre a saída de `docker compose config` (bloco `services:` em profundidade 2, `build:` em profundidade 4). Compatível com a saída padrão do Docker Compose; formatos exóticos podem exigir ajuste.
+- `compose_build_service` e `_build_custom` devolvem resultados por nameref (`local -n`), exigindo Bash ≥ 4.3.
+- `_registry_has_session` faz `grep -qF` no arquivo `~/.docker/config.json` inteiro (não apenas no bloco `auths`); uma chave `"<host>":` em `credHelpers` também casa. A checagem é deliberadamente permissiva — sem parser JSON, não é possível consultar um credential helper externo.
+- `_compose_file_args` (`lib/compose.sh`) ainda devolve os argumentos por `echo` e `compose_exec` os expande sem quotes (`SC2086`); quebra com `COMPOSE_FILES` contendo espaços. Dívida pré-existente à Sprint 4, registrada para correção futura.
+
+---
+
+## [0.1.3] - 2026-09-12 (Sprint 3 - Gauntlet Loop)
 
 ### Adicionado
 - **Matriz Completa de SSL (`self-signed`, `letsencrypt`, `manual`, `none`) em `lib/ssl.sh`**:

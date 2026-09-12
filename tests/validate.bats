@@ -172,3 +172,65 @@ teardown() {
     run validate_project_name "$(printf 'a%.0s' {1..64})"
     assert_failure
 }
+
+# --- validate_image_tag ----------------------------------------------------
+
+@test "validate_image_tag: aceita tags validas, incluindo maiusculas" {
+    run validate_image_tag "v1.0"
+    assert_success
+    run validate_image_tag "V1.0"
+    assert_success
+    run validate_image_tag "latest"
+    assert_success
+    run validate_image_tag "2026-09-12_build.42"
+    assert_success
+}
+
+@test "validate_image_tag: rejeita vazio" {
+    run validate_image_tag ""
+    assert_failure
+}
+
+@test "validate_image_tag: rejeita espacos" {
+    run validate_image_tag "v1 0"
+    assert_failure
+}
+
+@test "validate_image_tag: rejeita comecar com ponto ou hifen" {
+    run validate_image_tag ".v1"
+    assert_failure
+    run validate_image_tag "-v1"
+    assert_failure
+}
+
+@test "validate_image_tag: rejeita caracteres perigosos (barra, dois-pontos, arroba)" {
+    run validate_image_tag "v1/2"
+    assert_failure
+    run validate_image_tag "v1:2"
+    assert_failure
+    run validate_image_tag "v1@sha256"
+    assert_failure
+}
+
+@test "validate_image_tag: rejeita tag acima de 128 caracteres" {
+    run validate_image_tag "$(printf 'a%.0s' {1..129})"
+    assert_failure
+}
+
+# --- validate_service_name -------------------------------------------------
+
+@test "validate_service_name: aceita nomes validos" {
+    run validate_service_name "app"
+    assert_success
+    run validate_service_name "app-2"
+    assert_success
+    run validate_service_name "app_db"
+    assert_success
+}
+
+@test "validate_service_name: rejeita vazio e espacos" {
+    run validate_service_name ""
+    assert_failure
+    run validate_service_name "app db"
+    assert_failure
+}

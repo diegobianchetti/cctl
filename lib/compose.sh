@@ -38,7 +38,93 @@ compose_pull() {
 compose_build() {
     local build_args=("$@")
     msg_step "BUILD" "Construindo imagens..."
-    compose_exec build "${build_args[@]}"
+    compose_exec build "${build_args[@]}" || { log_error "Falha no build"; return 1; }
+    log_success "Build concluido"
+}
+
+# Verifica se um servico existe no compose do projeto atual.
+# Uso: compose_service_exists <servico>  (retorna 0=existe / 1=nao existe /
+# 2=falha ao consultar o compose — erro real, distinto de "nao existe")
+compose_service_exists() {
+    local service="$1"
+    local services
+    if ! services=$(compose_exec config --services 2>&1); then
+        log_error "Falha ao consultar servicos do compose: ${services}"
+        return 2
+    fi
+
+    local s
+    while IFS= read -r s; do
+        [[ "${s}" == "${service}" ]] && return 0
+    done <<< "${services}"
+
+    return 1
+}
+
+# Lista os servicos definidos no compose do projeto atual (um por linha).
+compose_list_services() {
+    compose_exec config --services 2>/dev/null
+}
+
+# Lista APENAS os servicos que tem contexto de build (chave `build:`) no
+# compose resolvido — os unicos que `docker compose build` sem argumentos
+# realmente constroi, e os unicos seguros para retag/push automatico (um
+# servico so com `image:`, ex. postgres:16, nao e nosso para republicar).
+#
+# Heuristica (bash puro, sem jq/yq): usa `docker compose config` (YAML
+# resolvido, sem --format json — mais portavel entre versoes do plugin) e
+# faz parsing por indentacao: dentro do bloco top-level "services:", cada
+# chave em 2 espacos e um nome de servico; se algum descendente direto tiver
+# uma chave "build:" em 4 espacos, o servico entra na lista.
+# Limitacao conhecida: assume a indentacao padrao de 2 espacos por nivel
+# emitida pelo `docker compose config` atual. Um compose com ancoras YAML
+# incomuns ou uma versao do plugin que mude o indentation style pode nao ser
+# reconhecido corretamente — nesse caso, passar os servicos explicitamente
+# na linha de comando contorna a heuristica.
+compose_buildable_services() {
+    local config
+    if ! config=$(compose_exec config 2>&1); then
+        log_error "Falha ao consultar configuracao do compose: ${config}"
+        return 1
+    fi
+
+    echo "${config}" | awk '
+        /^services:[[:space:]]*$/ { in_services = 1; next }
+        in_services && /^[A-Za-z0-9_-]+:[[:space:]]*$/ { in_services = 0 }
+        in_services && /^  [A-Za-z0-9._-]+:[[:space:]]*$/ {
+            if (svc != "" && has_build) print svc
+            svc = $1
+            sub(/:$/, "", svc)
+            has_build = 0
+            next
+        }
+        in_services && /^    build:/ { has_build = 1 }
+        END { if (svc != "" && has_build) print svc }
+    '
+}
+
+# Resolve a imagem efetiva de um servico (a definida/resultante no compose
+# resolvido) — usada para retaguear apos build com --tag.
+compose_service_image() {
+    local service="$1"
+    compose_exec config --images "${service}" 2>/dev/null | head -n1
+}
+
+# Build de servico(s) especificos.
+# Uso: compose_build_service <nome-do-array-bash-de-servicos> [flags...]
+# Recebe o NOME da variavel array (nameref) em vez de colapsar os servicos
+# numa string — evita o problema classico de `read -ra` desfazer o quoting
+# de nomes com espacos/caracteres especiais.
+compose_build_service() {
+    local -n _cbs_services="$1"
+    shift
+    local flags=("$@")
+
+    msg_step "BUILD" "Construindo servico(s): ${_cbs_services[*]}"
+    compose_exec build "${flags[@]}" "${_cbs_services[@]}" || {
+        log_error "Falha no build dos servicos: ${_cbs_services[*]}"
+        return 1
+    }
     log_success "Build concluido"
 }
 
