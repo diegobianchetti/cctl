@@ -83,6 +83,7 @@ EOF
 }
 
 @test "env_check_required_vars: falha e lista as vars ausentes" {
+    # shellcheck disable=SC2034  # lida por env_check_required_vars (lib/env.sh) via nome da var
     REQUIRED_VARS=(DOMAIN_NAME COMPOSE_PROJECT_NAME)
     unset DOMAIN_NAME COMPOSE_PROJECT_NAME
     run env_check_required_vars

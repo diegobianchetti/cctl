@@ -94,17 +94,12 @@ nginx_disable_site() {
 }
 
 # Testa config nginx e recarrega se valida
+#
+# Mantido pelo nome para nao quebrar chamadas/testes existentes — delega
+# diretamente a nginx_proxy_reload (mesma logica de teste+reload usada pelo
+# proxy nativo, ver "Proxy nativo" abaixo), eliminando a duplicacao.
 nginx_test_and_reload() {
-    msg_info "Testando configuracao nginx..."
-
-    if docker exec "${NGINX_CONTAINER_NAME}" nginx -t 2>/dev/null; then
-        msg_success "Configuracao valida"
-        docker exec "${NGINX_CONTAINER_NAME}" nginx -s reload 2>/dev/null
-        return 0
-    else
-        msg_error "Configuracao nginx invalida!"
-        return 1
-    fi
+    nginx_proxy_reload
 }
 
 # Noop: nginx-proxy usa redes runtime (docker network connect/disconnect),
