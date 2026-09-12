@@ -5,7 +5,27 @@ Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/),
 e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
-## [Unreleased] - 2026-09-11 (Sprint 1 - Gauntlet Loop)
+## [Unreleased] - 2026-09-12 (Sprint 2 - Gauntlet Loop)
+
+### Adicionado
+- **Subcomando Oficial de Proxy Nativo (`cctl proxy`)**:
+  - `commands/proxy.sh` com suporte a `up`, `down`, `reload`, `test`, `logs` e `status`.
+  - Provisionamento e garantia da rede Docker global `cctl-proxy-net` (`PROXY_NETWORK`).
+  - Execução gerenciada do container `nginx-proxy` (`ghcr.io/diegobianchetti/nginx-proxy`) com portas HTTP/HTTPS configuráveis, restart automático (`unless-stopped`) e privilégio de rede (`--cap-add NET_RAW`).
+  - Montagem contratual exata dos vhosts em `/etc/nginx/conf.d/vhosts:ro` (preservando `block-injects.conf`, `default.conf` e `error-pages.conf` nativos da imagem), certificados SSL (`/etc/nginx/certs:ro`), Let's Encrypt (`/etc/letsencrypt:ro`) e ACME webroot (`/var/www/certbot:ro`).
+  - Suporte a reload sem downtime (`cctl proxy reload`), teste de sintaxe (`cctl proxy test`) e streaming de logs (`cctl proxy logs -f`).
+  - Disponibilidade global no core (`lib/core.sh`): comando `proxy` acessível em qualquer contexto (`template`, `project`, `instance`, `unknown`).
+  - Autocomplete Bash em `cctl-completion.bash` para todos os subcomandos e flags de proxy.
+- **Bateria de Testes Bats do Proxy (`tests/proxy.bats`)**:
+  - 38 novos testes de unidade cobrindo todos os subcomandos, contratos exatos de montagem, tratamento de erros, pré-condições de container ausente e despacho de argumentos. Suíte expandida para **123 testes (100% passando)**.
+
+### Modificado
+- `lib/nginx.sh`: incorporadas as funções `nginx_proxy_*` e pré-condições amigáveis `_nginx_proxy_require_container`.
+- `cctl.conf`: documentados os knobs `PROXY_NETWORK`, `NGINX_PROXY_IMAGE`, `PROXY_HTTP_PORT`, `PROXY_HTTPS_PORT` e `LETSENCRYPT_DIR`.
+
+---
+
+## [0.1.1] - 2026-09-11 (Sprint 1 - Gauntlet Loop)
 
 ### Adicionado
 - **Suíte de Testes Unitários Bats (`tests/`)**:
