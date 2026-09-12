@@ -237,7 +237,7 @@ _ssl_issue_manual() {
     fi
 
     if ! _ssl_keypair_matches "${cert_src}" "${key_src}"; then
-        log_error "Certificado e chave privada nao formam um par valido (modulus divergente): ${cert_src} / ${key_src}"
+        log_error "Certificado e chave privada nao formam um par valido (chave publica do certificado nao corresponde a chave privada): ${cert_src} / ${key_src}"
         return 1
     fi
 
@@ -287,6 +287,21 @@ _ssl_keypair_matches() {
     key_pubkey=$(_ssl_read_file "${key_file}" | openssl pkey -pubout -outform DER 2>/dev/null | openssl sha256 2>/dev/null)
 
     [[ -n "${cert_pubkey}" && "${cert_pubkey}" == "${key_pubkey}" ]]
+}
+
+# Remove diretivas ssl_certificate/ssl_certificate_key vazias (sem valor) de
+# um vhost ja renderizado. Ocorre quando SSL_MODE=none e o vhost final usado
+# e o site.conf padrao (sem site-nossl.conf.template/site-nossl.conf
+# dedicado): {{SSL_CERT_PATH}}/{{SSL_KEY_PATH}} sao renderizados como string
+# vazia (ver ssl_get_cert_path/ssl_get_key_path, modo "none"), deixando
+# "ssl_certificate ;" no arquivo — o que reprova "nginx -t". Idempotente e
+# silenciosa se o arquivo nao existir.
+_ssl_strip_empty_cert_directives() {
+    local conf_file="$1"
+
+    [[ -f "${conf_file}" ]] || return 0
+
+    sed -i -E '/^[[:space:]]*ssl_certificate(_key)?[[:space:]]*;[[:space:]]*$/d' "${conf_file}"
 }
 
 # --- modo none ---------------------------------------------------------

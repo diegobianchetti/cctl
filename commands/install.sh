@@ -167,7 +167,8 @@ _install_nginx() {
             nginx_conf="./nginx/site-nossl.conf"
             log_debug "SSL desabilitado — usando site-nossl.conf ja renderizado"
         else
-            log_debug "SSL desabilitado, sem template/arquivo nossl dedicado — usando site.conf padrao"
+            log_debug "SSL desabilitado, sem template/arquivo nossl dedicado — limpando diretivas ssl vazias em site.conf padrao"
+            _ssl_strip_empty_cert_directives "${nginx_conf}"
         fi
     fi
 
@@ -206,21 +207,35 @@ _install_ssl() {
     ssl_issue "${DOMAIN_NAME}" || log_warn "Falha no SSL. Verifique manualmente."
 }
 
-# Sobe temporariamente um vhost HTTP puro (porta 80, com a rota
-# /.well-known/acme-challenge/ ja presente nos templates site.conf/site-nossl)
-# para o certbot conseguir emitir o primeiro certificado via webroot. Nao e
-# usado em renovacoes (ssl_cert_exists ja filtra esse caso no chamador).
+# Sobe temporariamente um vhost HTTP puro e ISOLADO (./nginx/.acme-bootstrap.conf)
+# so com a rota /.well-known/acme-challenge/, para o certbot conseguir emitir
+# o primeiro certificado via webroot. Nao e usado em renovacoes
+# (ssl_cert_exists ja filtra esse caso no chamador).
+#
+# IMPORTANTE: nunca tocar em ./nginx/site.conf aqui — esse arquivo ja contem
+# o vhost HTTPS final renderizado por env_render_all_templates (cmd_install,
+# passo 5) e e ativado logo em seguida por _install_nginx apos o Certbot
+# emitir o certificado. Usar um arquivo dedicado evita sobrescrever/destruir
+# o vhost final durante o bootstrap.
 _install_bootstrap_letsencrypt_http_vhost() {
-    local nginx_conf="./nginx/site.conf"
-
-    if [[ -f "./nginx/site-nossl.conf.template" ]]; then
-        env_render_template "./nginx/site-nossl.conf.template" "${nginx_conf}"
-    elif [[ ! -f "${nginx_conf}" ]]; then
-        log_warn "Nenhum vhost HTTP disponivel para o desafio ACME (nginx/site.conf ausente)"
-        return 1
-    fi
+    local domain="${DOMAIN_NAME}"
+    local tmp_conf="./nginx/.acme-bootstrap.conf"
 
     msg_step "SSL" "Publicando vhost HTTP temporario para o desafio ACME..."
+
+    cat > "${tmp_conf}" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain};
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    location / {
+        return 404;
+    }
+}
+EOF
 
     local project_network
     project_network=$(docker network ls --filter "name=${COMPOSE_PROJECT_NAME}" --format "{{.Name}}" | head -1)
@@ -228,7 +243,12 @@ _install_bootstrap_letsencrypt_http_vhost() {
         network_connect_nginx "${project_network}"
     fi
 
-    nginx_enable_site "${DOMAIN_NAME}" "${nginx_conf}"
+    local result=0
+    nginx_enable_site "${domain}" "${tmp_conf}" || result=1
+
+    rm -f "${tmp_conf}"
+
+    return "${result}"
 }
 
 # Instala cron entries no host (se HOST_CRON=true)

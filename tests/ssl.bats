@@ -295,7 +295,7 @@ teardown() {
 
     run ssl_issue "app.example.com"
     assert_failure
-    assert_output --partial "modulus divergente"
+    assert_output --partial "chave publica do certificado nao corresponde a chave privada"
 
     # nada foi instalado — abortou ANTES de tocar o destino
     [[ ! -d "${SSL_CERTS_DIR}/app.example.com" ]]
