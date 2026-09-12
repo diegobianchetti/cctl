@@ -6,7 +6,13 @@
 #   manual      — Certificados fornecidos pelo usuario (SSL_CERT_FILE + SSL_KEY_FILE)
 
 # Diretorio padrao onde nginx espera os certificados
-SSL_CERTS_DIR="/var/docker/nginx/config/ssl"
+SSL_CERTS_DIR="${SSL_CERTS_DIR:-/etc/nginx-proxy/certs}"
+
+# Diretorio padrao onde o certbot (letsencrypt) guarda os certificados
+LETSENCRYPT_LIVE_DIR="${LETSENCRYPT_LIVE_DIR:-/etc/letsencrypt/live}"
+
+# mkdir/cp/install com sudo somente quando necessario: ver core_priv_run
+# (lib/core.sh) — usado diretamente abaixo (_ssl_issue_manual).
 
 # Resolve o modo SSL configurado (padrao: letsencrypt)
 _ssl_mode() {
@@ -60,7 +66,7 @@ _ssl_issue_letsencrypt() {
 
     msg_step "SSL" "Solicitando certificado Let's Encrypt para ${domain}..."
 
-    local webroot="/var/docker/nginx/config/certbot"
+    local webroot="${CERTBOT_WEBROOT_DIR:-/etc/nginx-proxy/certbot}"
     local email="${CERTBOT_EMAIL:-admin@${domain}}"
 
     if sudo certbot certonly --webroot \
@@ -103,10 +109,17 @@ _ssl_issue_manual() {
     msg_step "SSL" "Instalando certificado manual para ${domain}..."
 
     local dest_dir="${SSL_CERTS_DIR}/${domain}"
-    sudo mkdir -p "${dest_dir}"
-    sudo cp "${cert_src}" "${dest_dir}/fullchain.pem"
-    sudo cp "${key_src}" "${dest_dir}/privkey.pem"
-    sudo chmod 600 "${dest_dir}/privkey.pem"
+
+    core_priv_run mkdir -p "${dest_dir}" || { log_error "Falha ao criar ${dest_dir}"; return 1; }
+    core_priv_run cp "${cert_src}" "${dest_dir}/fullchain.pem" || {
+        log_error "Falha ao copiar certificado para ${dest_dir}/fullchain.pem"
+        return 1
+    }
+    # install -m 600 evita a janela de exposicao entre cp e chmod para a chave privada
+    core_priv_run install -m 600 "${key_src}" "${dest_dir}/privkey.pem" || {
+        log_error "Falha ao instalar chave privada em ${dest_dir}/privkey.pem"
+        return 1
+    }
 
     log_success "Certificado manual instalado em ${dest_dir}"
     nginx_test_and_reload
@@ -159,7 +172,7 @@ ssl_status() {
 
     case "${mode}" in
         letsencrypt)
-            cert_file="/etc/letsencrypt/live/${domain}/cert.pem"
+            cert_file="${LETSENCRYPT_LIVE_DIR}/${domain}/cert.pem"
             ;;
         manual)
             cert_file="${SSL_CERTS_DIR}/${domain}/fullchain.pem"
@@ -172,7 +185,11 @@ ssl_status() {
     fi
 
     local expiry
-    expiry=$(sudo openssl x509 -enddate -noout -in "${cert_file}" 2>/dev/null | cut -d= -f2)
+    if [[ -r "${cert_file}" ]]; then
+        expiry=$(openssl x509 -enddate -noout -in "${cert_file}" 2>/dev/null | cut -d= -f2)
+    else
+        expiry=$(sudo openssl x509 -enddate -noout -in "${cert_file}" 2>/dev/null | cut -d= -f2)
+    fi
 
     echo -e "  Dominio:     ${CYAN}${domain}${RESET}"
     echo -e "  Modo SSL:    ${CYAN}${mode}${RESET}"

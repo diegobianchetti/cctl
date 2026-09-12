@@ -5,9 +5,100 @@
 # Versao do cctl
 CCTL_VERSION="0.1.0"
 
+# core_priv_run — executa rm/cp/install/mkdir com sudo somente quando necessario.
+#
+# Contrato de argumentos: core_priv_run <op> [flags/args...] <target>
+#   - <op> e sempre o primeiro argumento: rm, cp, install ou mkdir.
+#   - o TARGET/DESTINO e sempre o ULTIMO argumento da chamada (padrao de
+#     cp/install/mkdir/rm — o caminho que sera efetivamente criado/alterado).
+#   - para cp/install, a ORIGEM e o ultimo argumento nao-flag antes do
+#     target (heuristica: percorre os argumentos entre a operacao e o
+#     target, ignorando os que comecam com "-").
+#
+# Criterio de gravabilidade/legibilidade por operacao:
+#   rm       : a permissao de remover vem do diretorio-pai, nao do arquivo
+#              em si — testa sempre "dirname $target".
+#   cp/install: verifica LEITURA da origem ("-r \"$src\"" — uma origem
+#              ilegivel, ex. arquivo 0600 de root, exige sudo mesmo com
+#              destino gravavel) E ESCRITA do destino (o proprio alvo se
+#              ja existir, senao o diretorio-pai onde sera criado).
+#   mkdir    : sobe pelos ancestrais ate achar o primeiro diretorio
+#              existente e testa gravabilidade dele.
+#
+# Se alguma checagem indicar necessidade de privilegio, tenta `sudo -n`
+# quando stdin nao e um terminal (ambiente nao-interativo); se falhar,
+# reporta erro claro em vez de travar esperando senha. Em terminal
+# interativo, usa `sudo` normal (pode pedir senha).
+core_priv_run() {
+    local op="${1:-}"
+    local target="${*: -1}"
+    local need_sudo=false
+
+    case "${op}" in
+        rm)
+            local rm_dir
+            rm_dir="$(dirname -- "${target}")"
+            [[ -w "${rm_dir}" ]] || need_sudo=true
+            ;;
+        cp|install)
+            local src="" i arg
+            for (( i = 2; i < $#; i++ )); do
+                arg="${!i}"
+                [[ "${arg}" == -* ]] && continue
+                src="${arg}"
+            done
+
+            if [[ -n "${src}" && ! -r "${src}" ]]; then
+                need_sudo=true
+            fi
+
+            if [[ -e "${target}" ]]; then
+                [[ -w "${target}" ]] || need_sudo=true
+            else
+                local dst_dir
+                dst_dir="$(dirname -- "${target}")"
+                [[ -w "${dst_dir}" ]] || need_sudo=true
+            fi
+            ;;
+        mkdir)
+            local check_path="${target}"
+            while [[ ! -e "${check_path}" ]]; do
+                check_path="$(dirname -- "${check_path}")"
+            done
+            [[ -w "${check_path}" ]] || need_sudo=true
+            ;;
+        *)
+            log_error "core_priv_run: operacao nao suportada: ${op}"
+            return 2
+            ;;
+    esac
+
+    if [[ "${need_sudo}" == "false" ]]; then
+        "$@"
+        return $?
+    fi
+
+    if [[ ! -t 0 ]]; then
+        if sudo -n "$@"; then
+            return 0
+        fi
+        log_error "Privilegio de root necessario para '${op} ... ${target}' e sudo nao-interativo (sudo -n) falhou. Configure sudo NOPASSWD para este usuario ou execute em uma sessao interativa."
+        return 1
+    fi
+
+    sudo "$@"
+}
+
 # Carrega todas as libs
 core_bootstrap() {
     local lib_dir="${CCTL_ROOT}/lib"
+
+    # Defaults globais (cctl.conf) — carregado antes das libs para que
+    # variaveis como CCTL_REGISTRY estejam disponiveis a todas elas.
+    if [[ -f "${CCTL_ROOT}/cctl.conf" ]]; then
+        # shellcheck source=/dev/null
+        source "${CCTL_ROOT}/cctl.conf"
+    fi
 
     source "${lib_dir}/colors.sh"
     source "${lib_dir}/log.sh"

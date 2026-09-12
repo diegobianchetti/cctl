@@ -2,7 +2,7 @@
 # commands/list.sh — Lista instancias instaladas no servidor
 
 cmd_list() {
-    local base_dir="${INSTANCE_BASE_DIR:-/var/docker}"
+    local base_dir="${CCTL_INSTANCE_BASE_DIR:-${INSTANCE_BASE_DIR:-/var/docker}}"
 
     msg_header "Instancias cctl instaladas em ${base_dir}"
     echo ""
