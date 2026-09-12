@@ -444,6 +444,7 @@ _mock_docker_proxy() {
 }
 
 @test "core_check_command_context: proxy permitido em contexto unknown" {
+    # shellcheck disable=SC2034  # lida por core_check_command_context (lib/core.sh) via nome da var
     CCTL_CONTEXT="unknown"
     run core_check_command_context "proxy"
     assert_success

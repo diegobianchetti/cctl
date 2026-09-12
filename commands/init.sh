@@ -126,15 +126,44 @@ cmd_init() {
 
     # 3. Gera vhost de referencia (so se dominio informado)
     msg_step "3/3" "Gerando vhost de referencia..."
-    if [[ -n "${domain_name}" && -f "${dest_dir}/nginx/site.conf.template" ]]; then
-        sed \
-            -e "s|{{DOMAIN_NAME}}|${domain_name}|g" \
-            -e "s|{{COMPOSE_PROJECT_NAME}}|${project_name}|g" \
-            "${dest_dir}/nginx/site.conf.template" \
-            > "${dest_dir}/nginx/${project_name}.conf" || { msg_error "Falha ao gerar vhost"; return 1; }
-        log_success "Vhost gerado: nginx/${project_name}.conf"
+    if [[ -n "${domain_name}" ]]; then
+        local ssl_mode site_template
+        ssl_mode=$( (source "${dest_dir}/project.conf" 2>/dev/null; printf '%s' "${SSL_MODE:-letsencrypt}") )
+
+        # SSL_MODE=none: prefere o template HTTP-only dedicado, se existir,
+        # para nao gerar um vhost com diretivas ssl_certificate vazias.
+        site_template="${dest_dir}/nginx/site.conf.template"
+        if [[ "${ssl_mode}" == "none" && -f "${dest_dir}/nginx/site-nossl.conf.template" ]]; then
+            site_template="${dest_dir}/nginx/site-nossl.conf.template"
+        fi
+
+        if [[ -f "${site_template}" ]]; then
+            local ssl_cert_path ssl_key_path
+            ssl_cert_path=$(SSL_MODE="${ssl_mode}" ssl_get_cert_path "${domain_name}")
+            ssl_key_path=$(SSL_MODE="${ssl_mode}" ssl_get_key_path "${domain_name}")
+
+            sed \
+                -e "s|{{DOMAIN_NAME}}|${domain_name}|g" \
+                -e "s|{{COMPOSE_PROJECT_NAME}}|${project_name}|g" \
+                -e "s|{{SSL_CERT_PATH}}|${ssl_cert_path}|g" \
+                -e "s|{{SSL_KEY_PATH}}|${ssl_key_path}|g" \
+                "${site_template}" \
+                > "${dest_dir}/nginx/${project_name}.conf" || { msg_error "Falha ao gerar vhost"; return 1; }
+
+            if [[ -z "${ssl_cert_path}" && -z "${ssl_key_path}" ]]; then
+                # SSL_MODE=none (ou template sem par de certificado): remove
+                # diretivas ssl_certificate que ficariam vazias ("ssl_certificate ;"),
+                # o que quebraria a sintaxe do vhost gerado.
+                sed -i -E '/^[[:space:]]*ssl_certificate(_key)?[[:space:]]*;[[:space:]]*$/d' \
+                    "${dest_dir}/nginx/${project_name}.conf"
+            fi
+
+            log_success "Vhost gerado: nginx/${project_name}.conf"
+        else
+            log_debug "Vhost pulado (sem template de site disponivel)"
+        fi
     else
-        log_debug "Vhost pulado (sem dominio ou sem site.conf.template)"
+        log_debug "Vhost pulado (sem dominio informado)"
     fi
 
     echo ""

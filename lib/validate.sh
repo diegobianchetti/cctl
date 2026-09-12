@@ -52,7 +52,9 @@ validate_port_available() {
     return 0
 }
 
-# Verifica se o DNS do dominio resolve
+# Verifica se o DNS do dominio resolve. Usa `host`; na ausencia dele, cai
+# para `getent hosts` e depois `nslookup`. Sem nenhuma das tres ferramentas,
+# apenas avisa e deixa passar (nao bloqueia o preflight por causa do ambiente).
 validate_dns() {
     local domain="$1"
 
@@ -61,7 +63,20 @@ validate_dns() {
         localhost|*.local|*.test) return 0 ;;
     esac
 
-    if ! host "${domain}" &>/dev/null; then
+    local resolved=false
+
+    if command -v host &>/dev/null; then
+        host "${domain}" &>/dev/null && resolved=true
+    elif command -v getent &>/dev/null; then
+        getent hosts "${domain}" &>/dev/null && resolved=true
+    elif command -v nslookup &>/dev/null; then
+        nslookup "${domain}" &>/dev/null && resolved=true
+    else
+        log_warn "Nenhuma ferramenta de resolucao DNS disponivel (host/getent/nslookup) — pulando validacao de ${domain}"
+        return 0
+    fi
+
+    if [[ "${resolved}" != "true" ]]; then
         log_warn "DNS do dominio '${domain}' nao resolve. Verifique a configuracao."
         return 1
     fi
