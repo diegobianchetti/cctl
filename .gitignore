@@ -19,3 +19,6 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Frameworks de teste vendorizados (buscados via tests/bootstrap.sh, nao versionados)
+tests/vendor/

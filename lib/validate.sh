@@ -70,6 +70,25 @@ validate_dns() {
     return 0
 }
 
+# Valida o nome do projeto: whitelist estrita para evitar path traversal
+# (../), quebra do sed usado nos placeholders (| ou &) e nomes ilegais para
+# Docker/Nginx (compose project name, nome de container, vhost).
+validate_project_name() {
+    local name="$1"
+
+    if [[ -z "${name}" ]]; then
+        log_error "Nome do projeto nao pode ser vazio."
+        return 1
+    fi
+
+    if [[ ! "${name}" =~ ^[a-z0-9][a-z0-9_-]{1,62}$ ]]; then
+        log_error "Nome de projeto invalido: '${name}'. Use apenas minusculas, digitos, '-' e '_', comecando com letra/digito (2 a 63 caracteres)."
+        return 1
+    fi
+
+    return 0
+}
+
 # Verifica se o Git esta disponivel
 validate_git() {
     if ! command -v git &>/dev/null; then

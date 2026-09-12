@@ -5,6 +5,15 @@
 NGINX_CONTAINER_NAME="${NGINX_CONTAINER_NAME:-nginx-proxy}"
 NGINX_VHOSTS_DIR="${NGINX_VHOSTS_DIR:-/etc/nginx-proxy/vhosts.d}"
 
+# Executa cp/rm com sudo somente quando necessario. Uso: _nginx_priv <cmd> [args...]
+#
+# Wrapper fino sobre core_priv_run (lib/core.sh) — mantido pelo nome para nao
+# quebrar chamadas/testes existentes. Ver core_priv_run para o contrato de
+# argumentos e o criterio de gravabilidade/legibilidade por operacao.
+_nginx_priv() {
+    core_priv_run "$@"
+}
+
 # Instala config do site no nginx-proxy
 nginx_enable_site() {
     local domain="${1:-${DOMAIN_NAME}}"
@@ -22,14 +31,17 @@ nginx_enable_site() {
 
     local vhost_dst="${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf"
 
-    sudo cp "${nginx_conf_src}" "${vhost_dst}"
+    if ! _nginx_priv cp "${nginx_conf_src}" "${vhost_dst}"; then
+        log_error "Falha ao copiar configuracao nginx para ${vhost_dst}"
+        return 1
+    fi
 
     if nginx_test_and_reload; then
         log_success "Site ${domain} habilitado no nginx-proxy"
         return 0
     else
         log_error "Config nginx invalida! Revertendo..."
-        sudo rm -f "${vhost_dst}"
+        _nginx_priv rm -f "${vhost_dst}"
         return 1
     fi
 }
@@ -38,14 +50,23 @@ nginx_enable_site() {
 nginx_disable_site() {
     local domain="${1:-${DOMAIN_NAME}}"
     local vhost_dst="${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf"
-    local backup_dir="/tmp/nginx_backup_${COMPOSE_PROJECT_NAME}"
+    local backup_dir
+    backup_dir="$(mktemp -d "${TMPDIR:-/tmp}/cctl_nginx_backup.XXXXXX")" || {
+        log_error "Falha ao criar diretorio de backup temporario"
+        return 1
+    }
 
-    mkdir -p "${backup_dir}"
-    [[ -f "${vhost_dst}" ]] && cp -p "${vhost_dst}" "${backup_dir}/"
+    if [[ -f "${vhost_dst}" ]]; then
+        core_priv_run cp -p "${vhost_dst}" "${backup_dir}/" || {
+            log_error "Falha ao criar backup do vhost ${vhost_dst}"
+            rm -rf "${backup_dir}"
+            return 1
+        }
+    fi
 
     msg_info "Removendo configuracao nginx para ${domain}..."
     echo -e "  ${CYAN}${vhost_dst}${RESET}"
-    sudo rm -f "${vhost_dst}"
+    _nginx_priv rm -f "${vhost_dst}"
 
     if nginx_test_and_reload; then
         rm -rf "${backup_dir}"
@@ -53,8 +74,10 @@ nginx_disable_site() {
         return 0
     else
         log_error "Config nginx invalida apos remocao! Restaurando..."
-        [[ -f "${backup_dir}/${COMPOSE_PROJECT_NAME}.conf" ]] && \
-            sudo cp -p "${backup_dir}/${COMPOSE_PROJECT_NAME}.conf" "${vhost_dst}"
+        if [[ -f "${backup_dir}/${COMPOSE_PROJECT_NAME}.conf" ]]; then
+            core_priv_run cp -p "${backup_dir}/${COMPOSE_PROJECT_NAME}.conf" "${vhost_dst}" || \
+                log_error "Falha ao restaurar vhost de backup para ${vhost_dst}"
+        fi
         nginx_test_and_reload
         rm -rf "${backup_dir}"
         return 1

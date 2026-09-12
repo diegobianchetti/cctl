@@ -50,6 +50,8 @@ cmd_init() {
         return 1
     fi
 
+    validate_project_name "${project_name}" || return 1
+
     local template_dir="${CCTL_ROOT}/templates/${template_type}"
     if [[ ! -d "${template_dir}" ]]; then
         msg_error "Template '${template_type}' nao encontrado."
@@ -73,9 +75,18 @@ cmd_init() {
     fi
 
     if [[ -d "${dest_dir}" ]]; then
-        msg_error "Diretorio ja existe: ${dest_dir}"
-        msg_info "Remova o diretorio ou escolha outro nome/destino."
-        return 1
+        if [[ ! -r "${dest_dir}" || ! -w "${dest_dir}" || ! -x "${dest_dir}" ]]; then
+            msg_error "Sem permissao no diretorio: ${dest_dir}"
+            return 1
+        fi
+
+        if find "${dest_dir}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+            msg_error "Diretorio ja existe e nao esta vazio: ${dest_dir}"
+            msg_info "Remova o diretorio, esvazie-o ou escolha outro nome/destino."
+            return 1
+        else
+            msg_warn "Diretorio ja existe e esta vazio: ${dest_dir} — reutilizando."
+        fi
     fi
 
     echo ""
@@ -89,23 +100,23 @@ cmd_init() {
 
     # 1. Cria diretorio e copia template
     msg_step "1/3" "Copiando template ${template_type}..."
-    mkdir -p "${dest_dir}"
-    cp -r "${template_dir}"/. "${dest_dir}/"
+    mkdir -p "${dest_dir}" || { msg_error "Falha ao criar diretorio: ${dest_dir}"; return 1; }
+    cp -r "${template_dir}"/. "${dest_dir}/" || { msg_error "Falha ao copiar template"; return 1; }
     log_success "Template copiado para ${dest_dir}"
 
     # 2. Configura .env e project.conf
     msg_step "2/3" "Configurando .env e project.conf..."
 
     local env_file_rel env_template_rel
-    env_file_rel=$(bash -c "source '${dest_dir}/project.conf' 2>/dev/null; echo \"\${ENV_FILE:-docker/.env}\"")
-    env_template_rel=$(bash -c "source '${dest_dir}/project.conf' 2>/dev/null; echo \"\${ENV_TEMPLATE:-docker/.env.template}\"")
+    env_file_rel=$( ( source "${dest_dir}/project.conf" 2>/dev/null; printf '%s' "${ENV_FILE:-docker/.env}" ) )
+    env_template_rel=$( ( source "${dest_dir}/project.conf" 2>/dev/null; printf '%s' "${ENV_TEMPLATE:-docker/.env.template}" ) )
 
     local env_file="${dest_dir}/${env_file_rel}"
     local env_template="${dest_dir}/${env_template_rel}"
 
     if [[ -f "${env_template}" ]]; then
-        mkdir -p "$(dirname "${env_file}")"
-        cp "${env_template}" "${env_file}"
+        mkdir -p "$(dirname "${env_file}")" || { msg_error "Falha ao criar diretorio para ${env_file}"; return 1; }
+        cp "${env_template}" "${env_file}" || { msg_error "Falha ao copiar ${env_template} para ${env_file}"; return 1; }
     fi
 
     _init_render_placeholders "${env_file}" "${project_name}" "${domain_name}"
@@ -120,7 +131,7 @@ cmd_init() {
             -e "s|{{DOMAIN_NAME}}|${domain_name}|g" \
             -e "s|{{COMPOSE_PROJECT_NAME}}|${project_name}|g" \
             "${dest_dir}/nginx/site.conf.template" \
-            > "${dest_dir}/nginx/${project_name}.conf"
+            > "${dest_dir}/nginx/${project_name}.conf" || { msg_error "Falha ao gerar vhost"; return 1; }
         log_success "Vhost gerado: nginx/${project_name}.conf"
     else
         log_debug "Vhost pulado (sem dominio ou sem site.conf.template)"
