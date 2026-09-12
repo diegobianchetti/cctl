@@ -20,7 +20,7 @@ _cctl_completions() {
     local all_commands="init install up down start stop restart ps logs status
                         network volumes config connect build update backup list
                         db-check-config db-update-config clear-volumes clear-all
-                        destroy help"
+                        destroy proxy help"
 
     # Opcoes globais
     local global_opts="--version --help --verbose -v -h"
@@ -106,6 +106,23 @@ _cctl_completions() {
         clear-volumes|clear-all|destroy)
             # Sem sugestoes (operacoes destrutivas pedem confirmacao)
             COMPREPLY=()
+            ;;
+
+        proxy)
+            # Subacoes do proxy nativo (disponivel em qualquer contexto)
+            local pos_count=0
+            local i
+            for (( i=1; i < COMP_CWORD; i++ )); do
+                [[ "${COMP_WORDS[i]}" != -* ]] && (( pos_count++ )) || true
+            done
+
+            if (( pos_count == 1 )); then
+                COMPREPLY=( $(compgen -W "up down reload test logs status" -- "${cur}") )
+            elif [[ "${prev}" == "logs" ]]; then
+                COMPREPLY=( $(compgen -W "-f --tail" -- "${cur}") )
+            else
+                COMPREPLY=()
+            fi
             ;;
 
         up|down|start|stop|restart|build|update)
