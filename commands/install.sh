@@ -12,7 +12,8 @@
 #   6. Pre-flight checks
 #   7. Pull/build imagens
 #   8. Up containers
-#   9. Nginx + SSL (se HOST_NGINX/HOST_SSL)
+#   9. SSL (se HOST_SSL) + Nginx (se HOST_NGINX) — SSL antes do nginx para
+#      que o certificado ja exista quando "nginx -t" validar a config final
 #  10. Cron (se HOST_CRON)
 #  11. Hook post-install
 #  12. Grava .cctl-instance
@@ -45,6 +46,7 @@ cmd_install() {
     _install_allocate_subnet || return 1
 
     # 5. Renderiza templates
+    _install_set_ssl_paths || return 1
     msg_step "TEMPLATES" "Renderizando templates..."
     env_render_all_templates
     log_success "Templates renderizados"
@@ -64,9 +66,12 @@ cmd_install() {
     # 10. Up
     compose_up
 
-    # 11. Nginx + SSL
-    _install_nginx
+    # 11. SSL + Nginx — SSL roda ANTES para que o certificado (self-signed,
+    # manual ou letsencrypt) ja exista quando _install_nginx testar a
+    # configuracao final com "nginx -t" (ver _install_ssl para o bootstrap
+    # do desafio ACME quando o certificado letsencrypt ainda nao existe).
     _install_ssl
+    _install_nginx || return 1
 
     # 12. Cron
     _install_cron
@@ -93,6 +98,18 @@ cmd_install() {
     echo ""
 
     log_success "Instancia ${COMPOSE_PROJECT_NAME} instalada com sucesso!"
+}
+
+# Define {{SSL_CERT_PATH}}/{{SSL_KEY_PATH}} no .env com base no SSL_MODE do
+# manifest, para que env_render_all_templates os substitua nos templates
+# nginx (ssl_certificate / ssl_certificate_key)
+_install_set_ssl_paths() {
+    local cert_path key_path
+    cert_path=$(ssl_get_cert_path "${DOMAIN_NAME}") || return 1
+    key_path=$(ssl_get_key_path "${DOMAIN_NAME}") || return 1
+
+    env_set_var "SSL_CERT_PATH" "${cert_path}"
+    env_set_var "SSL_KEY_PATH" "${key_path}"
 }
 
 # Aloca subnet e seta no .env
@@ -132,17 +149,34 @@ _install_nginx() {
         network_connect_nginx "${project_network}"
     fi
 
-    # Seleciona vhost baseado em MOODLE_SSL (false = HTTP-only sem certificado)
+    # Vhost HTTP-only quando SSL esta desabilitado: SSL_MODE=none, HOST_SSL=false
+    # ou o legado MOODLE_SSL=false. Se existir um template dedicado
+    # (nginx/site-nossl.conf.template), renderiza-o para nginx/site.conf;
+    # senao usa um site-nossl.conf ja renderizado, se houver.
     local nginx_conf="./nginx/site.conf"
-    if [[ "${MOODLE_SSL:-true}" == "false" ]]; then
-        nginx_conf="./nginx/site-nossl.conf"
-        log_debug "MOODLE_SSL=false — usando vhost HTTP-only"
+    local ssl_disabled=false
+    if [[ "${SSL_MODE:-}" == "none" || "${HOST_SSL:-false}" != "true" || "${MOODLE_SSL:-true}" == "false" ]]; then
+        ssl_disabled=true
+    fi
+
+    if [[ "${ssl_disabled}" == "true" ]]; then
+        if [[ -f "./nginx/site-nossl.conf.template" ]]; then
+            log_debug "SSL desabilitado — renderizando vhost HTTP-only a partir de site-nossl.conf.template"
+            env_render_template "./nginx/site-nossl.conf.template" "${nginx_conf}"
+        elif [[ -f "./nginx/site-nossl.conf" ]]; then
+            nginx_conf="./nginx/site-nossl.conf"
+            log_debug "SSL desabilitado — usando site-nossl.conf ja renderizado"
+        else
+            log_debug "SSL desabilitado, sem template/arquivo nossl dedicado — usando site.conf padrao"
+        fi
     fi
 
     nginx_enable_site "${DOMAIN_NAME}" "${nginx_conf}" || return 1
 }
 
-# Solicita/instala certificado SSL (se HOST_SSL=true e MOODLE_SSL=true)
+# Solicita/instala certificado SSL (se HOST_SSL=true, MOODLE_SSL!=false e
+# SSL_MODE!=none). Roda ANTES de _install_nginx (ver cmd_install) para que o
+# certificado ja exista quando o nginx testar a configuracao final.
 _install_ssl() {
     if [[ "${HOST_SSL:-false}" != "true" ]]; then
         log_debug "HOST_SSL desabilitado, pulando SSL"
@@ -154,7 +188,47 @@ _install_ssl() {
         return 0
     fi
 
+    if [[ "${SSL_MODE:-}" == "none" ]]; then
+        log_debug "SSL_MODE=none — pulando emissao de certificado"
+        return 0
+    fi
+
+    # letsencrypt exige um vhost HTTP respondendo em /.well-known/acme-challenge/
+    # ANTES da emissao (desafio webroot). Se o certificado ainda nao existe,
+    # sobe temporariamente esse vhost HTTP puro; o vhost final (SSL ou nossl)
+    # e aplicado depois por _install_nginx.
+    if [[ "$(_ssl_mode)" == "letsencrypt" ]] && [[ "${HOST_NGINX:-false}" == "true" ]] \
+        && ! ssl_cert_exists "${DOMAIN_NAME}"; then
+        _install_bootstrap_letsencrypt_http_vhost || \
+            log_warn "Falha ao preparar vhost HTTP temporario para o desafio ACME — emissao letsencrypt pode falhar"
+    fi
+
     ssl_issue "${DOMAIN_NAME}" || log_warn "Falha no SSL. Verifique manualmente."
+}
+
+# Sobe temporariamente um vhost HTTP puro (porta 80, com a rota
+# /.well-known/acme-challenge/ ja presente nos templates site.conf/site-nossl)
+# para o certbot conseguir emitir o primeiro certificado via webroot. Nao e
+# usado em renovacoes (ssl_cert_exists ja filtra esse caso no chamador).
+_install_bootstrap_letsencrypt_http_vhost() {
+    local nginx_conf="./nginx/site.conf"
+
+    if [[ -f "./nginx/site-nossl.conf.template" ]]; then
+        env_render_template "./nginx/site-nossl.conf.template" "${nginx_conf}"
+    elif [[ ! -f "${nginx_conf}" ]]; then
+        log_warn "Nenhum vhost HTTP disponivel para o desafio ACME (nginx/site.conf ausente)"
+        return 1
+    fi
+
+    msg_step "SSL" "Publicando vhost HTTP temporario para o desafio ACME..."
+
+    local project_network
+    project_network=$(docker network ls --filter "name=${COMPOSE_PROJECT_NAME}" --format "{{.Name}}" | head -1)
+    if [[ -n "${project_network}" ]]; then
+        network_connect_nginx "${project_network}"
+    fi
+
+    nginx_enable_site "${DOMAIN_NAME}" "${nginx_conf}"
 }
 
 # Instala cron entries no host (se HOST_CRON=true)

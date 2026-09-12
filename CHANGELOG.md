@@ -5,7 +5,32 @@ Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/),
 e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
-## [Unreleased] - 2026-09-12 (Sprint 2 - Gauntlet Loop)
+## [Unreleased] - 2026-09-12 (Sprint 3 - Gauntlet Loop)
+
+### Adicionado
+- **Matriz Completa de SSL (`self-signed`, `letsencrypt`, `manual`, `none`) em `lib/ssl.sh`**:
+  - Modo `self-signed`: geração imediata de par RSA-2048 via OpenSSL com Subject Alternative Name (SAN: `DNS:${domain},DNS:*.${domain}`), instalação atômica com permissões restritas (`install -m 600/644`) e recarregamento sem downtime.
+  - Modo `letsencrypt`: pré-validação de DNS com fallbacks múltiplos (`host` → `getent` → `nslookup`), emissão automatizada via Certbot webroot e bootstrap de vhost HTTP temporário.
+  - Modo `manual`: validação estrita de par de chaves agnóstica de algoritmo (suporta RSA, ECDSA, Ed25519) comparando hashes SHA-256 das chaves públicas DER antes de qualquer alteração no disco; suporte a chaves privadas `0600 root` via leitura privilegiada.
+  - Modo `none`: fallback puramente HTTP que não falha nem gera vhosts com diretivas vazias.
+  - Resolução de caminhos internos do container via `ssl_get_cert_path` e `ssl_get_key_path`.
+  - Suporte a `ssl_status` e `ssl_renew` (com regeneração efetiva de novos pares no modo `self-signed`).
+- **Subcomando Oficial `cctl ssl` (`commands/ssl.sh`)**:
+  - Ações: `status`, `issue`, `renew`, ajuda/uso, liberado em contexto `instance` e `project`.
+- **Location ACME nos Templates Nginx**:
+  - Adicionado `location /.well-known/acme-challenge/ { root /var/www/certbot; }` e placeholders `{{SSL_CERT_PATH}}` e `{{SSL_KEY_PATH}}` em `templates/moodle/nginx/site.conf.template` e `templates/dspace/nginx/site.conf.template`.
+- **Bateria de Testes Bats (`tests/ssl.bats`)**:
+  - Ampliada para 54 testes (totalizando **163 testes na suíte**), cobrindo todos os 4 modos, pares ECDSA reais e rejeição de incompatibilidade de chaves.
+
+### Modificado
+- `commands/install.sh`: ordem de bootstrap ajustada (`_install_ssl` antes de `_install_nginx`), checagens estritas de retorno (`|| return 1`) e seleção automática de `site-nossl.conf.template` quando `SSL_MODE=none` ou `HOST_SSL=false`.
+- `commands/init.sh`: vhost de referência renderiza caminhos SSL de forma consistente sem deixar diretivas vazias no modo `none`.
+- `lib/nginx.sh`: `nginx_test_and_reload` refatorado para delegar a `nginx_proxy_reload`.
+- `templates/dspace/project.conf`: `SSL_MODE` alinhado para `"none"`.
+
+---
+
+## [0.1.2] - 2026-09-12 (Sprint 2 - Gauntlet Loop)
 
 ### Adicionado
 - **Subcomando Oficial de Proxy Nativo (`cctl proxy`)**:

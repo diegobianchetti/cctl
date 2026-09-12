@@ -72,3 +72,40 @@ mock_sudo_passthrough() {
         exec "$@"
     '
 }
+
+# Gera um par chave/certificado autoassinado REAL (RSA 2048, valido por 1
+# dia) para testes que precisam de modulus batendo de verdade — ex.
+# validacao estrita de SSL_MODE=manual. Nao usa mock: openssl real do host.
+# Uso: make_test_keypair <cert_path> <key_path> [cn] [SAN]
+make_test_keypair() {
+    local cert_path="$1"
+    local key_path="$2"
+    local cn="${3:-test.example.com}"
+    local san="${4:-DNS:${cn}}"
+
+    openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+        -keyout "${key_path}" \
+        -out "${cert_path}" \
+        -subj "/CN=${cn}" \
+        -addext "subjectAltName=${san}" \
+        &>/dev/null
+}
+
+# Gera um par chave/certificado autoassinado REAL com curva ECDSA
+# (prime256v1), para testes de comparacao de par agnostica de algoritmo
+# (_ssl_keypair_matches nao pode depender de "openssl rsa"/modulus).
+# Uso: make_test_ecdsa_keypair <cert_path> <key_path> [cn] [SAN]
+make_test_ecdsa_keypair() {
+    local cert_path="$1"
+    local key_path="$2"
+    local cn="${3:-test.example.com}"
+    local san="${4:-DNS:${cn}}"
+
+    openssl req -x509 -nodes -days 1 \
+        -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+        -keyout "${key_path}" \
+        -out "${cert_path}" \
+        -subj "/CN=${cn}" \
+        -addext "subjectAltName=${san}" \
+        &>/dev/null
+}

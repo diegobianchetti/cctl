@@ -5,10 +5,10 @@
 # Versao do cctl
 CCTL_VERSION="0.1.0"
 
-# core_priv_run — executa rm/cp/install/mkdir com sudo somente quando necessario.
+# core_priv_run — executa rm/cp/install/mkdir/cat com sudo somente quando necessario.
 #
 # Contrato de argumentos: core_priv_run <op> [flags/args...] <target>
-#   - <op> e sempre o primeiro argumento: rm, cp, install ou mkdir.
+#   - <op> e sempre o primeiro argumento: rm, cp, install, mkdir ou cat.
 #   - o TARGET/DESTINO e sempre o ULTIMO argumento da chamada (padrao de
 #     cp/install/mkdir/rm — o caminho que sera efetivamente criado/alterado).
 #   - para cp/install, a ORIGEM e o ultimo argumento nao-flag antes do
@@ -24,6 +24,9 @@ CCTL_VERSION="0.1.0"
 #              ja existir, senao o diretorio-pai onde sera criado).
 #   mkdir    : sobe pelos ancestrais ate achar o primeiro diretorio
 #              existente e testa gravabilidade dele.
+#   cat      : verifica apenas LEITURA do target (unico argumento) — usado
+#              para ler arquivos restritos (ex. chave privada 0600 de root)
+#              sem copiar/mover nada.
 #
 # Se alguma checagem indicar necessidade de privilegio, tenta `sudo -n`
 # quando stdin nao e um terminal (ambiente nao-interativo); se falhar,
@@ -66,6 +69,9 @@ core_priv_run() {
                 check_path="$(dirname -- "${check_path}")"
             done
             [[ -w "${check_path}" ]] || need_sudo=true
+            ;;
+        cat)
+            [[ -r "${target}" ]] || need_sudo=true
             ;;
         *)
             log_error "core_priv_run: operacao nao suportada: ${op}"
@@ -152,9 +158,9 @@ core_check_command_context() {
             esac
             ;;
         project)
-            # Diretorio de projeto pre-install: apenas install, help e proxy (gerenciamento global)
+            # Diretorio de projeto pre-install: install, ssl, help e proxy (gerenciamento global)
             case "${cmd}" in
-                install|help|proxy) return 0 ;;
+                install|ssl|help|proxy) return 0 ;;
                 *)
                     msg_error "Comando '${cmd}' nao disponivel. Esta instancia ainda nao foi instalada."
                     msg_info "Execute 'cctl install' para instalar."

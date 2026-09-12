@@ -38,6 +38,7 @@ _help_template_commands() {
 _help_project_commands() {
     echo -e "${BOLD}Comandos disponiveis (diretorio de projeto — pre-install):${RESET}"
     echo "  install             Instala a instancia no servidor"
+    echo "  ssl <status|issue|renew>  Gerencia o certificado SSL (SSL_MODE do manifest)"
     echo "  proxy <up|down|reload|test|logs|status>  Gerencia o proxy nginx compartilhado"
     echo "  help                Exibe esta ajuda"
 }
@@ -61,6 +62,11 @@ _help_instance_commands() {
     echo ""
     echo -e "  ${CYAN}Acesso:${RESET}"
     echo "  connect <servico>   Abre shell no container do servico"
+    echo ""
+    echo -e "  ${CYAN}SSL:${RESET}"
+    echo "  ssl status [dominio]  Modo SSL, caminho do certificado e expiracao"
+    echo "  ssl issue [dominio]   Emite/instala o certificado conforme SSL_MODE"
+    echo "  ssl renew [dominio]   Renova o certificado conforme SSL_MODE"
     echo ""
     echo -e "  ${CYAN}Proxy Nativo:${RESET}"
     echo "  proxy up            Sobe a infraestrutura do proxy (rede + diretorios + container)"
