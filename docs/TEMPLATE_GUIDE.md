@@ -231,6 +231,27 @@ timeout 180 bash -c \
 echo "GitLab inicializado."
 ```
 
+## Diretório opcional: `docker/custom/<serviço>/`
+
+Convenção usada por `cctl build --custom <serviço>` para builds de imagem
+próprios do projeto (fora do `build:` declarado no compose — ex: extensões,
+pacotes extras, timezone, ou uma imagem que o template nem expõe via
+compose). Cada serviço com build customizado tem seu próprio diretório,
+usado como contexto de build:
+
+```
+docker/custom/<serviço>/
+  Dockerfile      # obrigatório para o serviço ser buildável via --custom
+  ...             # demais arquivos do contexto (scripts, configs, patches)
+```
+
+O nome do diretório é o nome do serviço passado em `--custom <serviço>` — não
+precisa corresponder a um serviço do compose. Autores de template que
+disponibilizam customização documentam aqui os serviços suportados e o que
+cada `Dockerfile` espera do contexto. O diretório base é configurável via
+`CUSTOM_BUILD_DIR` (default `docker/custom`), útil se o template já usa
+`docker/` para outra convenção.
+
 ## Exemplo completo: template gitlab
 
 ### 1. Crie o diretório

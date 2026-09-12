@@ -140,13 +140,38 @@ _cctl_completions() {
             fi
             ;;
 
-        up|down|start|stop|restart|build|update)
+        up|down|start|stop|restart|update)
             # Servicos opcionais
             local services
             services=$(_cctl_get_services)
             if [[ -n "${services}" ]]; then
                 COMPREPLY=( $(compgen -W "${services}" -- "${cur}") )
             fi
+            ;;
+
+        build)
+            # Servicos do compose + flags do ciclo de build/customizacao/push
+            local services
+            services=$(_cctl_get_services)
+            local build_opts="--no-cache --pull -t --tag --custom --push --registry --help"
+            case "${prev}" in
+                --custom)
+                    # Completa com os diretorios de servico existentes em
+                    # CUSTOM_BUILD_DIR (default: docker/custom/<servico>/)
+                    local custom_dir="${CUSTOM_BUILD_DIR:-docker/custom}"
+                    local custom_services=""
+                    if [[ -d "${custom_dir}" ]]; then
+                        custom_services="$(cd "${custom_dir}" 2>/dev/null && ls -1d */ 2>/dev/null | sed 's#/$##' | tr '\n' ' ')"
+                    fi
+                    COMPREPLY=( $(compgen -W "${custom_services}" -- "${cur}") )
+                    ;;
+                -t|--tag|--registry)
+                    COMPREPLY=()
+                    ;;
+                *)
+                    COMPREPLY=( $(compgen -W "${services} ${build_opts}" -- "${cur}") )
+                    ;;
+            esac
             ;;
 
         *)
