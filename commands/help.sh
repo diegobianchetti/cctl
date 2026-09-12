@@ -31,12 +31,14 @@ cmd_help() {
 _help_template_commands() {
     echo -e "${BOLD}Comandos disponiveis (repositorio de templates):${RESET}"
     echo "  init <template> <nome>  Inicializa diretorio de projeto a partir de um template"
+    echo "  proxy <up|down|reload|test|logs|status>  Gerencia o proxy nginx compartilhado"
     echo "  help                    Exibe esta ajuda"
 }
 
 _help_project_commands() {
     echo -e "${BOLD}Comandos disponiveis (diretorio de projeto — pre-install):${RESET}"
     echo "  install             Instala a instancia no servidor"
+    echo "  proxy <up|down|reload|test|logs|status>  Gerencia o proxy nginx compartilhado"
     echo "  help                Exibe esta ajuda"
 }
 
@@ -59,6 +61,14 @@ _help_instance_commands() {
     echo ""
     echo -e "  ${CYAN}Acesso:${RESET}"
     echo "  connect <servico>   Abre shell no container do servico"
+    echo ""
+    echo -e "  ${CYAN}Proxy Nativo:${RESET}"
+    echo "  proxy up            Sobe a infraestrutura do proxy (rede + diretorios + container)"
+    echo "  proxy down          Para e remove o container do proxy"
+    echo "  proxy reload        Testa e recarrega a configuracao nginx"
+    echo "  proxy test          Testa a sintaxe da configuracao (todos os vhosts)"
+    echo "  proxy logs [flags]  Encaminha argumentos extras para 'docker logs'"
+    echo "  proxy status        Status do container, saude, portas e rede"
     echo ""
     echo -e "  ${CYAN}Manutencao:${RESET}"
     echo "  build               Build/rebuild de imagens locais"
@@ -83,6 +93,7 @@ _help_all_commands() {
     echo -e "${BOLD}Comandos:${RESET}"
     echo "  init <template> <nome>  Inicializa diretorio de projeto a partir de um template"
     echo "  install                 Instala a instancia no servidor"
+    echo "  proxy <up|down|reload|test|logs|status>  Gerencia o proxy nginx compartilhado"
     echo "  help                    Exibe esta ajuda"
     echo ""
     echo -e "${DIM}Execute 'cctl help' dentro do diretorio de um projeto ou de uma instancia instalada para ver todos os comandos.${RESET}"

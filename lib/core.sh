@@ -141,9 +141,9 @@ core_check_command_context() {
             return 0
             ;;
         template)
-            # Repo de templates: apenas init e help
+            # Repo de templates: apenas init, help e proxy (gerenciamento global)
             case "${cmd}" in
-                init|help) return 0 ;;
+                init|help|proxy) return 0 ;;
                 *)
                     msg_error "Comando '${cmd}' requer uma instancia instalada."
                     msg_info "Use 'cctl init' para criar uma nova instancia ou acesse o diretorio de uma instancia existente."
@@ -152,9 +152,9 @@ core_check_command_context() {
             esac
             ;;
         project)
-            # Diretorio de projeto pre-install: apenas install e help
+            # Diretorio de projeto pre-install: apenas install, help e proxy (gerenciamento global)
             case "${cmd}" in
-                install|help) return 0 ;;
+                install|help|proxy) return 0 ;;
                 *)
                     msg_error "Comando '${cmd}' nao disponivel. Esta instancia ainda nao foi instalada."
                     msg_info "Execute 'cctl install' para instalar."
@@ -163,8 +163,9 @@ core_check_command_context() {
             esac
             ;;
         *)
+            # Contexto desconhecido: apenas init, help e proxy (gerenciamento global)
             case "${cmd}" in
-                init|help) return 0 ;;
+                init|help|proxy) return 0 ;;
                 *)
                     msg_error "Diretorio atual nao e um contexto valido do cctl."
                     msg_info "Use 'cctl init' para criar um novo projeto ou acesse o diretorio de uma instancia instalada."
