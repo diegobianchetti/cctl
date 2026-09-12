@@ -19,14 +19,22 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
   - Ações: `status`, `issue`, `renew`, ajuda/uso, liberado em contexto `instance` e `project`.
 - **Location ACME nos Templates Nginx**:
   - Adicionado `location /.well-known/acme-challenge/ { root /var/www/certbot; }` e placeholders `{{SSL_CERT_PATH}}` e `{{SSL_KEY_PATH}}` em `templates/moodle/nginx/site.conf.template` e `templates/dspace/nginx/site.conf.template`.
-- **Bateria de Testes Bats (`tests/ssl.bats`)**:
-  - Ampliada para 54 testes (totalizando **163 testes na suíte**), cobrindo todos os 4 modos, pares ECDSA reais e rejeição de incompatibilidade de chaves.
+- **Bateria de Testes Bats (`tests/ssl.bats` e `tests/install.bats`)**:
+  - `tests/ssl.bats` ampliada para 54 testes cobrindo todos os 4 modos, pares ECDSA reais e rejeição de incompatibilidade de chaves.
+  - `tests/install.bats` (novo, 10 testes) cobrindo o bootstrap isolado do ACME, preservação do vhost final HTTPS, cenários `SSL_MODE=none` com/sem template dedicado e propagação de falhas.
+  - Total da suíte: **173 testes (100% passando)**.
 
 ### Modificado
 - `commands/install.sh`: ordem de bootstrap ajustada (`_install_ssl` antes de `_install_nginx`), checagens estritas de retorno (`|| return 1`) e seleção automática de `site-nossl.conf.template` quando `SSL_MODE=none` ou `HOST_SSL=false`.
+- `commands/install.sh`: `_install_bootstrap_letsencrypt_http_vhost` refatorada para usar vhost temporário isolado (`./nginx/.acme-bootstrap.conf`) com rota ACME dedicada, sem jamais sobrescrever o `nginx/site.conf` final.
+- `lib/ssl.sh`: novo helper `_ssl_strip_empty_cert_directives()` para remover diretivas `ssl_certificate[_key] ;` vazias em vhosts sem SSL.
 - `commands/init.sh`: vhost de referência renderiza caminhos SSL de forma consistente sem deixar diretivas vazias no modo `none`.
 - `lib/nginx.sh`: `nginx_test_and_reload` refatorado para delegar a `nginx_proxy_reload`.
 - `templates/dspace/project.conf`: `SSL_MODE` alinhado para `"none"`.
+
+### Limitações conhecidas
+- `_ssl_strip_empty_cert_directives` remove apenas diretivas `ssl_certificate` vazias; um template customizado de terceiro que declare `listen 443 ssl;` sem certificado correspondente continuará reprovando no `nginx -t`. Nos templates embarcados (`moodle` com `site-nossl` dedicado e `dspace` HTTP puro) esse caminho é inalcançável.
+- Os testes de `tests/install.bats` operam com o mock de `docker` retornando sucesso, de modo que `nginx -t` nunca reprova na suíte: ela prova qual vhost foi aplicado, não que seu conteúdo é sintaticamente válido.
 
 ---
 
