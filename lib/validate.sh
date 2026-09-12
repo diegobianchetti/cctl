@@ -104,6 +104,45 @@ validate_project_name() {
     return 0
 }
 
+# Valida tag de imagem de acordo com o charset aceito por registries OCI
+# (docker/distribution): letras, digitos, '_', '.', '-', ate 128 caracteres,
+# nao pode comecar com '.' ou '-'.
+validate_image_tag() {
+    local tag="$1"
+
+    if [[ -z "${tag}" ]]; then
+        log_error "Tag de imagem nao pode ser vazia."
+        return 1
+    fi
+
+    if [[ ! "${tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+        log_error "Tag de imagem invalida: '${tag}'. Use apenas letras, digitos, '.', '_' e '-', comecando com letra/digito/underscore (ate 128 caracteres)."
+        return 1
+    fi
+
+    return 0
+}
+
+# Valida nome de servico (usado para compor a referencia de imagem e para
+# argumentos posicionais de `cctl build`). Mesmo charset de validate_image_tag
+# por seguranca/consistencia (evita path traversal e quebra de referencia
+# "registry/projeto-servico:tag").
+validate_service_name() {
+    local name="$1"
+
+    if [[ -z "${name}" ]]; then
+        log_error "Nome de servico nao pode ser vazio."
+        return 1
+    fi
+
+    if [[ ! "${name}" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+        log_error "Nome de servico invalido: '${name}'. Use apenas letras, digitos, '.', '_' e '-', comecando com letra/digito/underscore (ate 128 caracteres)."
+        return 1
+    fi
+
+    return 0
+}
+
 # Verifica se o Git esta disponivel
 validate_git() {
     if ! command -v git &>/dev/null; then

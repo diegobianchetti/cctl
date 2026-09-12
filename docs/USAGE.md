@@ -143,7 +143,11 @@ Apos instalado, todos os comandos operacionais ficam disponiveis:
 | Comando | Descricao |
 |---------|-----------|
 | `cctl connect <servico>` | Abre shell (bash) no container |
-| `cctl build` | Build/rebuild de imagens locais |
+| `cctl build [servico...]` | Build/rebuild de imagens (todas ou so as indicadas) |
+| `cctl build --no-cache` \| `--pull` | Repassa a flag ao `docker compose build` |
+| `cctl build -t/--tag <tag>` | Aplica tag customizada as imagens construidas |
+| `cctl build --custom <servico>` | Build via Dockerfile customizado do projeto |
+| `cctl build --push [--registry <url>]` | Publica as imagens construidas no registry |
 | `cctl update` | Pull de imagens atualizadas e recria containers |
 | `cctl backup` | Executa backup (dump do banco + volumes) |
 | `cctl list` | Lista instancias instaladas no servidor |
@@ -302,6 +306,55 @@ SSL_KEY_FILE="/caminho/da/chave.key"
 1. Crie `templates/<novo>/` com `project.conf`, `.env.template`, compose, etc.
 2. Siga a estrutura dos templates existentes como referencia
 3. O template ficara automaticamente disponivel no `cctl init`
+
+### Build de imagens customizadas (`cctl build`)
+
+`cctl build` sem argumentos compila todas as imagens com `build:` definido no
+compose do projeto (comportamento padrao do `docker compose build`). Para
+compilar so alguns servicos, informe os nomes; um servico inexistente falha
+com a lista dos servicos disponiveis, sem chamar o Docker:
+
+```bash
+cctl build                    # todas as imagens com build: no compose
+cctl build moodle-app          # so o servico moodle-app
+cctl build --no-cache --pull   # forca rebuild sem cache e atualiza imagens base
+```
+
+#### Dockerfile customizado do projeto
+
+Para builds fora do compose (imagem propria, nao definida como `build:` de
+nenhum servico do template), a convencao e um diretorio por servico:
+
+```
+docker/custom/<servico>/Dockerfile
+```
+
+O contexto de build e o proprio diretorio `docker/custom/<servico>/`. O
+diretorio base pode ser sobrescrito com a variavel `CUSTOM_BUILD_DIR`. Exemplo
+completo — build customizado, tag e publicacao no registry:
+
+```bash
+cctl build --custom moodle-app --tag v1.2.0 --push
+```
+
+#### Publicando no registry (`--push`)
+
+O registry alvo e `${CCTL_REGISTRY:-ghcr.io/${DOCKER_OWNER}}`, sobrescrevivel
+com `--registry <url>`. Autenticacao usa `CCTL_REGISTRY_USER` +
+`CCTL_REGISTRY_TOKEN` (ou `GHCR_TOKEN`/`DOCKER_TOKEN`) via
+`docker login --password-stdin` — **o token nunca deve ser passado como
+argumento de linha de comando** (fica visivel em `ps`/historico/logs).
+Exporte-o so na sessao do shell ou num secret do CI:
+
+```bash
+export CCTL_REGISTRY_USER="diegobianchetti"
+export CCTL_REGISTRY_TOKEN="$(cat /caminho/seguro/token)"
+cctl build --push
+```
+
+Sem token no ambiente, `cctl build --push` reaproveita uma sessao ja
+autenticada em `~/.docker/config.json` (`docker login` manual previo); sem
+token e sem sessao, falha com erro claro antes de tentar qualquer login.
 
 ---
 

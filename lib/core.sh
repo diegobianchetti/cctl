@@ -112,6 +112,7 @@ core_bootstrap() {
     source "${lib_dir}/validate.sh"
     source "${lib_dir}/network.sh"
     source "${lib_dir}/compose.sh"
+    source "${lib_dir}/registry.sh"
     source "${lib_dir}/volumes.sh"
     source "${lib_dir}/passwords.sh"
     source "${lib_dir}/database.sh"
