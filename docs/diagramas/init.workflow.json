@@ -1,0 +1,205 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "cctl init: preparo do projeto no repositorio local",
+    "output": "docs/diagramas/fluxo-init.html",
+    "animation": "trace",
+    "visual_preset": "blueprint",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "copiar",
+        "label": "Copiar e renderizar",
+        "focus": [
+          "cmd",
+          "copia",
+          "render",
+          "config",
+          "env"
+        ],
+        "note": "O init copia o template e troca os placeholders pelos dados do projeto."
+      },
+      {
+        "id": "guarda",
+        "label": "Guarda de destino",
+        "focus": [
+          "cmd",
+          "guarda"
+        ],
+        "note": "Destino com arquivos e recusado; destino vazio e reutilizado."
+      }
+    ],
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "backend": {
+          "label": "Passo"
+        },
+        "security": {
+          "label": "Config / guarda"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "local",
+      "label": "Maquina local · repositorio do projeto"
+    },
+    {
+      "id": "portao",
+      "label": "Guarda de destino",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "cmd",
+    "copia",
+    "render",
+    "config",
+    "env",
+    "vhost"
+  ],
+  "semanticChecks": {
+    "allowedRoots": [
+      "cmd"
+    ],
+    "allowedTerminals": [
+      "vhost",
+      "guarda"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "cmd",
+      "lane": "local",
+      "col": 0,
+      "type": "backend",
+      "label": "cctl init",
+      "sublabel": "<template> <nome>",
+      "tag": "--domain · --dest",
+      "width": 132
+    },
+    {
+      "id": "copia",
+      "lane": "local",
+      "col": 1,
+      "type": "backend",
+      "label": "copia template",
+      "sublabel": "templates/<tipo>/",
+      "width": 132
+    },
+    {
+      "id": "render",
+      "lane": "local",
+      "col": 2,
+      "type": "backend",
+      "label": "renderiza",
+      "sublabel": "sed nos placeholders",
+      "tag": "{{...}} · _PLACEHOLDER_",
+      "width": 148
+    },
+    {
+      "id": "config",
+      "lane": "local",
+      "col": 3,
+      "type": "backend",
+      "label": "project.conf",
+      "sublabel": "manifest sourceable",
+      "tag": "COMPOSE_FILES",
+      "width": 132
+    },
+    {
+      "id": "env",
+      "lane": "local",
+      "col": 4,
+      "type": "security",
+      "label": "docker/.env",
+      "sublabel": "AUTO_PASSWORD_VARS",
+      "tag": "nunca no git",
+      "width": 132
+    },
+    {
+      "id": "vhost",
+      "lane": "local",
+      "col": 5,
+      "type": "security",
+      "label": "vhost de referencia",
+      "sublabel": "nginx/<nome>.conf",
+      "width": 148
+    },
+    {
+      "id": "guarda",
+      "lane": "portao",
+      "col": 1,
+      "type": "security",
+      "label": "destino nao vazio",
+      "sublabel": "recusa, nao copia",
+      "tag": "vazio: reutiliza",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_init",
+      "from": "cmd",
+      "to": "copia",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e_copia",
+      "from": "copia",
+      "to": "render",
+      "role": "main"
+    },
+    {
+      "id": "e_render",
+      "from": "render",
+      "to": "config",
+      "role": "main"
+    },
+    {
+      "id": "e_conf",
+      "from": "config",
+      "to": "env",
+      "role": "main"
+    },
+    {
+      "id": "e_env",
+      "from": "env",
+      "to": "vhost",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e_guarda",
+      "from": "cmd",
+      "to": "guarda",
+      "role": "error",
+      "variant": "security",
+      "label": "se ja existe"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "Sem git, por design",
+      "items": [
+        "O init nao faz branch, commit nem push — nao ha automacao de git",
+        "Ele apenas copia o template e renderiza os placeholders",
+        "Nenhum segredo nasce aqui: AUTO_PASSWORD_VARS e gerado no cctl install"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Depois do init",
+      "items": [
+        "cd <destino> e revisar docker/.env",
+        "Sem --domain: o vhost e pulado e o .env fica sem DOMAIN_NAME",
+        "Proximo comando: cctl install, no servidor"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,214 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "cctl install: deploy da instancia no servidor",
+    "output": "docs/diagramas/fluxo-install.html",
+    "animation": "trace",
+    "visual_preset": "blueprint",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "ambiente",
+        "label": "Ambiente e containers",
+        "focus": [
+          "contexto",
+          "ambiente",
+          "render",
+          "preflight",
+          "containers"
+        ],
+        "note": "Contexto, senhas, subnet, templates e pre-flight antes de subir container."
+      },
+      {
+        "id": "borda",
+        "label": "Borda e fecho",
+        "focus": [
+          "containers",
+          "tls_nginx",
+          "fecho"
+        ],
+        "note": "SSL antes do nginx; cron, hook e .cctl-instance fecham o install."
+      }
+    ],
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "backend": {
+          "label": "Passo"
+        },
+        "security": {
+          "label": "Guarda / borda"
+        },
+        "cloud": {
+          "label": "Execucao"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "servidor",
+      "label": "Servidor · passos 1 a 9"
+    },
+    {
+      "id": "borda",
+      "label": "Borda e fecho · passos 10 a 14"
+    }
+  ],
+  "mainPath": [
+    "contexto",
+    "ambiente",
+    "render",
+    "preflight",
+    "containers",
+    "tls_nginx",
+    "fecho"
+  ],
+  "semanticChecks": {
+    "allowedRoots": [
+      "contexto"
+    ],
+    "allowedTerminals": [
+      "fecho"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "contexto",
+      "lane": "servidor",
+      "col": 0,
+      "type": "security",
+      "label": "1 · valida contexto",
+      "sublabel": "project.conf presente",
+      "tag": "sem .cctl-instance",
+      "width": 148
+    },
+    {
+      "id": "ambiente",
+      "lane": "servidor",
+      "col": 1,
+      "type": "security",
+      "label": "2-3 · senhas e subnet",
+      "sublabel": "passwords_generate_all",
+      "tag": "network_allocate_subnet",
+      "width": 148
+    },
+    {
+      "id": "render",
+      "lane": "servidor",
+      "col": 2,
+      "type": "backend",
+      "label": "4-5 · renderiza e .env",
+      "sublabel": "env_render_all_templates",
+      "tag": "env_load",
+      "width": 148
+    },
+    {
+      "id": "preflight",
+      "lane": "servidor",
+      "col": 3,
+      "type": "security",
+      "label": "6 · pre-flight",
+      "sublabel": "docker · disco · DNS",
+      "tag": "aborta o install",
+      "width": 132
+    },
+    {
+      "id": "containers",
+      "lane": "servidor",
+      "col": 4,
+      "type": "cloud",
+      "label": "7-9 · pull, build, up",
+      "sublabel": "compose_pull · compose up -d",
+      "tag": "build se ha Dockerfile",
+      "width": 160
+    },
+    {
+      "id": "tls_nginx",
+      "lane": "borda",
+      "col": 4,
+      "type": "security",
+      "label": "10-11 · SSL e nginx",
+      "sublabel": "certificado antes do nginx -t",
+      "tag": "SSL_MODE",
+      "width": 160
+    },
+    {
+      "id": "fecho",
+      "lane": "borda",
+      "col": 5,
+      "type": "backend",
+      "label": "12-14 · cron e registro",
+      "sublabel": "/etc/cron.d · hook post-install",
+      "tag": ".cctl-instance",
+      "width": 160
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_ctx",
+      "from": "contexto",
+      "to": "ambiente",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e_amb",
+      "from": "ambiente",
+      "to": "render",
+      "role": "main"
+    },
+    {
+      "id": "e_rend",
+      "from": "render",
+      "to": "preflight",
+      "role": "main"
+    },
+    {
+      "id": "e_pre",
+      "from": "preflight",
+      "to": "containers",
+      "role": "main"
+    },
+    {
+      "id": "e_up",
+      "from": "containers",
+      "to": "tls_nginx",
+      "role": "main",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "e_tls",
+      "from": "tls_nginx",
+      "to": "fecho",
+      "role": "main",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Portoes que abortam",
+      "items": [
+        ".cctl-instance presente: recusa — instancia ja instalada",
+        "Pre-flight reprovado: aborta antes do pull",
+        "Pull sem copia local: erro duro nomeando a imagem; com copia local avisa e segue",
+        "nginx -t reprovado: remove o vhost e nao recarrega"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Borda e fecho",
+      "items": [
+        "SSL_MODE: self-signed, letsencrypt, manual ou none",
+        "SSL antes do nginx: o certificado ja existe quando nginx -t valida",
+        "nginx_enable_site copia o vhost; nginx_proxy_reload testa e recarrega",
+        "network_connect_nginx poe o proxy na rede com alias do dominio",
+        "Passo 2b: network_cleanup_orphans remove rede orfa da instalacao anterior"
+      ]
+    }
+  ]
+}
