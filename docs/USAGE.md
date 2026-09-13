@@ -152,6 +152,57 @@ Apos instalado, todos os comandos operacionais ficam disponiveis:
 | `cctl backup` | Executa backup (dump do banco + volumes) |
 | `cctl list` | Lista instancias instaladas no servidor |
 
+### Rollout (Blue/Green)
+
+| Comando | Descricao |
+|---------|-----------|
+| `cctl rollout bluegreen [--service <svc>] [--image <ref>]` | Sobe a nova versao em slot paralelo, testa saude e troca o trafego no nginx sem downtime |
+| `cctl rollout rolling [--service <svc>] [--image <ref>]` | Recreate seguro do slot atual (mesmo alias), com rollback automatico se o healthcheck falhar |
+| `cctl rollout status` | Slot live, container, saude, alvo do vhost e imagem em uso |
+| `cctl rollout help` | Exibe o uso sintetico de `cctl rollout` |
+| `--health-mode auto\|docker\|http` | Estrategia de sonda (default `auto`: usa `docker` se o servico declara `healthcheck:`, senao `http`) |
+| `--timeout <s>` \| `--health-path <p>` \| `--health-port <p>` | Ajustam o healthcheck (timeout total, path e porta da sonda HTTP) |
+| `--drain <s>` \| `--keep-old` | [somente `bluegreen`] Segundos de dreno antes de derrubar o slot antigo, ou mantem-lo no ar |
+
+#### Modelo de slots
+
+- **slot blue**: o container gerenciado pelo `docker compose` normalmente (`${COMPOSE_PROJECT_NAME}-<svc>`, alias de rede `<svc>`).
+- **slot green**: um container paralelo, subido a partir de um override de compose gerado em runtime (`docker-compose.rollout.yaml`, sempre removido ao final — inclusive em erro), com `container_name: ${COMPOSE_PROJECT_NAME}-<svc>-green` e `hostname: <svc>-green` via `extends:` do compose base. O override e gerado no mesmo diretorio do arquivo de `COMPOSE_FILES` que efetivamente **define** o servico (nem sempre o primeiro — ex.: template `dspace`, onde `dspace-angular` esta no segundo arquivo), e o `extends.file` aponta para o basename desse arquivo (nunca um caminho com `/`) porque o `docker compose` resolve `extends.file` relativo ao diretorio do proprio override, nao ao CWD.
+- O slot **live** alterna a cada rollout bem-sucedido. O candidato e sempre o slot que nao esta live.
+- O vhost do nginx usa `resolver 127.0.0.11; set $target <alias>:<porta>; proxy_pass <scheme>://$target;` — o Blue/Green so precisa trocar o alias dessa linha e recarregar o nginx (`nginx -t` + `nginx -s reload`) para mudar o trafego, sem `upstream` estatico.
+- **O switch reescreve o vhost VIVO em `NGINX_VHOSTS_DIR` (`/etc/nginx-proxy/vhosts.d/<projeto>.conf`), nunca o `./nginx/site.conf` da instancia.** O `site.conf` continua sendo apenas o render base gerado pelo `cctl install` — depois do primeiro rollout ele nao reflete mais o slot ativo. `cctl rollout status` (ou a leitura direta do vhost vivo) e a fonte da verdade sobre para onde o trafego esta indo, nunca o `site.conf` da instancia.
+- Estado do rollout (slot live, alvo, imagem, data) fica em `ROLLOUT_STATE_FILE` (default `.cctl-rollout`, na raiz da instancia) — sourceable, mas lido por parsing (nunca dado `source` diretamente pelo cctl). A porta gravada no estado (`LIVE_TARGET`) e sempre a porta do servico/vhost — `--health-port` fica restrito a porta usada pela sonda de saude, que pode divergir.
+
+#### Exemplo (dominio ficticio)
+
+```bash
+# instancia ja com "cctl proxy up" e "cctl install" feitos, app.acme.example.br no ar
+cctl rollout bluegreen --service moodle-app --image ghcr.io/acme/moodle-app:2.5.1 \
+    --timeout 90 --health-path /login/index.php --drain 15
+
+cctl rollout status
+# Servico:        moodle-app
+# Slot live:      green
+# Container:      acme-moodle-app-green
+# Status:         running
+# Saude:          healthy
+# Alvo do vhost:  moodle-app-green:443
+# Imagem:         ghcr.io/acme/moodle-app:2.5.1
+# Ultimo rollout: 2026-09-12T21:00:00-03:00
+
+# Recreate seguro (mesmo alias, sem troca de trafego), com rollback automatico:
+cctl rollout rolling --service moodle-app --image ghcr.io/acme/moodle-app:2.5.2
+```
+
+#### Limitacoes conhecidas
+
+- O dreno do slot anterior e por **tempo fixo** (`--drain`/`ROLLOUT_DRAIN_SECONDS`), nao por contagem de conexoes ativas — conexoes mais longas que o dreno sao encerradas.
+- A sonda HTTP roda **de dentro da rede do projeto**, via `docker exec` no container de sonda (default: o proxy nginx) — sem uma sonda com `curl`/`wget` disponivel no container, o modo `http` falha com erro claro.
+- O override de compose usa `extends:`, um recurso do `docker compose` validado com `docker compose` real na VM de lab (heranca de `depends_on`, `--no-deps` subindo somente o candidato); a suite de testes automatizados continua usando mocks e nao pode atestar o `extends:` em si (ver `WORK_LOG.md`/handoff da Sprint 5).
+- `cctl rollout rolling` **nao** serve para introduzir um segundo slot: o candidato e sempre o proprio servico do compose (`--force-recreate`), o que implica um breve intervalo sem esse container durante a recriacao.
+- **A imagem nova do rollout NAO e persistida em lugar nenhum** — o override runtime (`docker-compose.rollout.yaml`) e efemero e sempre removido ao final. O `.env`/compose da instancia continuam declarando a imagem antiga; um `cctl up` ou `cctl update` posterior **reverte silenciosamente** a versao em producao para o que estiver no `.env`. O rollout (`bluegreen`/`rolling`) e o mecanismo de troca de trafego/recreate seguro, nao o mecanismo de persistir a versao — para tornar a nova imagem permanente, atualize a variavel de imagem correspondente no `.env` da instancia apos confirmar o rollout.
+- **O restante do `cctl` nao conhece o slot green.** `cctl ps`, `cctl stop`, `cctl down` e `cctl up` operam apenas sobre o compose base (sem o override do rollout) — o container `<svc>-green` aparece para eles como um container "orfao" da rede/projeto. Em particular, `cctl up --remove-orphans` (ou o equivalente `docker compose ... --remove-orphans`) pode derrubar o slot green **mesmo que ele esteja em trafego** apos um rollout. Evite `--remove-orphans` em instancias com um rollout Blue/Green ativo; confira `cctl rollout status` antes.
+
 ### Banco de dados
 
 | Comando | Descricao |

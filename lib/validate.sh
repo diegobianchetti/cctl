@@ -143,6 +143,52 @@ validate_service_name() {
     return 0
 }
 
+# Valida referencia de imagem completa (registry/repositorio:tag ou @digest),
+# usada por `cctl rollout --image`. Mais permissiva que validate_image_tag
+# (aceita '/' de registry/repositorio e ':' de porta/tag/digest), mas
+# restrita a um charset seguro — rejeita espacos, quebras de linha e
+# qualquer caractere que pudesse escapar do contexto YAML do override de
+# compose gerado em runtime (ver _rollout_bring_up_candidate).
+validate_image_ref() {
+    local ref="$1"
+
+    if [[ -z "${ref}" ]]; then
+        log_error "Referencia de imagem nao pode ser vazia."
+        return 1
+    fi
+
+    if [[ ${#ref} -gt 255 ]]; then
+        log_error "Referencia de imagem muito longa (max 255 caracteres): '${ref}'."
+        return 1
+    fi
+
+    if [[ ! "${ref}" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]]; then
+        log_error "Referencia de imagem invalida: '${ref}'. Use apenas letras, digitos, '.', '_', '-', '/', ':' e '@' (sem espacos ou quebras de linha)."
+        return 1
+    fi
+
+    return 0
+}
+
+# Valida o path de healthcheck HTTP (`cctl rollout --health-path`): deve
+# comecar com '/' e nao pode conter espacos/quebras de linha (evita montar
+# uma URL de sonda quebrada ou injetar conteudo na chamada de curl/wget).
+validate_health_path() {
+    local path="$1"
+
+    if [[ "${path}" != /* ]]; then
+        log_error "--health-path invalido: '${path}' (deve comecar com '/')."
+        return 1
+    fi
+
+    if [[ "${path}" == *' '* || "${path}" == *$'\n'* || "${path}" == *$'\t'* ]]; then
+        log_error "--health-path invalido: '${path}' (contem espaco ou quebra de linha)."
+        return 1
+    fi
+
+    return 0
+}
+
 # Verifica se o Git esta disponivel
 validate_git() {
     if ! command -v git &>/dev/null; then

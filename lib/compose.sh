@@ -27,6 +27,20 @@ compose_exec() {
     docker compose ${file_args} -p "${COMPOSE_PROJECT_NAME}" "$@"
 }
 
+# Executa compose_exec com um -f de override adicional quando informado
+# (usado pelo rollout Blue/Green para o docker-compose.rollout.yaml gerado em
+# runtime). Com override vazio, comporta-se como compose_exec puro. Uso:
+# compose_exec_override <override-ou-vazio> <args...>
+compose_exec_override() {
+    local override="$1"
+    shift
+    if [[ -n "${override}" ]]; then
+        compose_exec -f "${override}" "$@"
+    else
+        compose_exec "$@"
+    fi
+}
+
 # Pull de imagens
 compose_pull() {
     msg_step "PULL" "Baixando imagens..."
