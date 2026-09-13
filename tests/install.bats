@@ -12,7 +12,7 @@ setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh core.sh env.sh network.sh nginx.sh ssl.sh
+    source_lib colors.sh log.sh core.sh env.sh network.sh compose.sh nginx.sh ssl.sh
     # shellcheck source=/dev/null
     source "${CCTL_ROOT}/commands/install.sh"
 
@@ -168,6 +168,54 @@ EOF
 
     run _install_nginx
     assert_failure
+}
+
+# ============================================================
+# _install_cleanup_orphan_network (P2: recuperacao de rede orfa)
+# ============================================================
+
+@test "_install_cleanup_orphan_network: desconecta o proxy e remove rede orfa antes de recriar" {
+    export COMPOSE_PROJECT_NAME="app"
+
+    declare -A CCTL_TEST_NETS=( [app_network]="app" )
+    mock_docker_with_networks CCTL_TEST_NETS "${WORKDIR}/docker_calls.log"
+
+    run _install_cleanup_orphan_network
+    assert_success
+    run cat "${WORKDIR}/docker_calls.log"
+    assert_output --partial "network disconnect app_network nginx-proxy"
+    assert_output --partial "network rm app_network"
+}
+
+@test "_install_cleanup_orphan_network: sem rede orfa nao chama disconnect/rm" {
+    export COMPOSE_PROJECT_NAME="app"
+
+    declare -A CCTL_TEST_NETS=()
+    mock_docker_with_networks CCTL_TEST_NETS "${WORKDIR}/docker_calls.log"
+
+    run _install_cleanup_orphan_network
+    assert_success
+    run cat "${WORKDIR}/docker_calls.log"
+    refute_output --partial "network disconnect"
+    refute_output --partial "network rm"
+}
+
+@test "_install_cleanup_orphan_network (regressao B1): projeto 'moodle' nao toca a rede de 'moodle-lab'" {
+    export COMPOSE_PROJECT_NAME="moodle"
+
+    declare -A CCTL_TEST_NETS=(
+        [moodle_network]=""
+        [moodle-lab_moodle-network]=""
+    )
+    mock_docker_with_networks CCTL_TEST_NETS "${WORKDIR}/docker_calls.log"
+
+    run _install_cleanup_orphan_network
+    assert_success
+    run cat "${WORKDIR}/docker_calls.log"
+    assert_output --partial "network disconnect moodle_network nginx-proxy"
+    assert_output --partial "network rm moodle_network"
+    refute_output --partial "network disconnect moodle-lab_moodle-network nginx-proxy"
+    refute_output --partial "network rm moodle-lab_moodle-network"
 }
 
 # ============================================================

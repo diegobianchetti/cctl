@@ -78,7 +78,7 @@ _backup_volumes() {
     local backup_dir="$1"
     local backup_name="$2"
     local volumes
-    volumes=$(docker volume ls -q --filter "name=${COMPOSE_PROJECT_NAME}")
+    volumes=$(volumes_list_for_project "${COMPOSE_PROJECT_NAME}")
 
     if [[ -z "${volumes}" ]]; then
         log_debug "Nenhum volume para backup"
@@ -88,7 +88,7 @@ _backup_volumes() {
     local vol
     for vol in ${volumes}; do
         local vol_backup
-        vol_backup="${backup_dir}/${backup_name}-vol-$(echo "${vol}" | sed "s/${COMPOSE_PROJECT_NAME}_//").tar.gz"
+        vol_backup="${backup_dir}/${backup_name}-vol-${vol#"${COMPOSE_PROJECT_NAME}_"}.tar.gz"
         msg_info "Backup do volume: ${vol}..."
 
         docker run --rm \
@@ -109,8 +109,17 @@ _backup_rotate() {
     local backup_dir="$1"
     local keep="${BACKUP_RETENTION:-7}"
 
+    # O padrao de -name exige a forma exata do timestamp
+    # (AAAAMMDD-HHMMSS) logo apos "${COMPOSE_PROJECT_NAME}-": um glob solto
+    # "${COMPOSE_PROJECT_NAME}-*" tambem casa backups de outro projeto cujo
+    # nome tem este como prefixo (ex: "moodle-*" casa
+    # "moodle-lab-20260913-...tar.gz") — com BACKUP_DIR compartilhado entre
+    # instancias, a rotacao de um projeto contaria/removeria os backups do
+    # outro.
+    local -r ts_glob="[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]"
+
     local count
-    count=$(find "${backup_dir}" -name "${COMPOSE_PROJECT_NAME}-*" -type f | wc -l)
+    count=$(find "${backup_dir}" -name "${COMPOSE_PROJECT_NAME}-${ts_glob}*" -type f | wc -l)
 
     if [[ ${count} -le ${keep} ]]; then
         return 0
@@ -118,7 +127,7 @@ _backup_rotate() {
 
     msg_info "Rotacionando backups (mantendo ultimos ${keep})..."
 
-    find "${backup_dir}" -name "${COMPOSE_PROJECT_NAME}-*" -type f -printf '%T@ %p\n' \
+    find "${backup_dir}" -name "${COMPOSE_PROJECT_NAME}-${ts_glob}*" -type f -printf '%T@ %p\n' \
         | sort -n \
         | head -n -"${keep}" \
         | cut -d' ' -f2- \

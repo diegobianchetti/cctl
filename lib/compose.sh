@@ -42,9 +42,54 @@ compose_exec_override() {
 }
 
 # Pull de imagens
+#
+# Opcao (a) escolhida sobre "pull --ignore-pull-failures": pull por servico
+# (compose_exec pull <servico>) da controle fino sobre qual imagem falhou e
+# permite decidir, por servico, se a falha e tolerada (imagem so local, ex.
+# construida por `cctl build`, sem registry — comportamento esperado) ou dura
+# (imagem realmente ausente e inalcancavel). "--ignore-pull-failures" faria
+# isso implicitamente para TODAS as imagens, exigindo depois uma segunda
+# varredura com `docker image inspect` por imagem para so entao decidir —
+# mais um passo, mesmo resultado. Aqui a checagem de presenca local so roda
+# quando o pull daquele servico de fato falha, evitando N chamadas
+# desnecessarias no caminho feliz.
 compose_pull() {
     msg_step "PULL" "Baixando imagens..."
-    compose_exec pull
+
+    local services
+    if ! services=$(compose_list_services); then
+        log_error "Falha ao listar servicos do compose para pull"
+        return 1
+    fi
+
+    local -a hard_failures=()
+    local service image
+    while IFS= read -r service; do
+        [[ -z "${service}" ]] && continue
+
+        if compose_exec pull "${service}" </dev/null; then
+            continue
+        fi
+
+        image=$(compose_service_image "${service}") || image=""
+        if [[ -z "${image}" ]]; then
+            log_warn "Nao foi possivel resolver a imagem do servico ${service} — pulando checagem de copia local."
+            continue
+        fi
+
+        if docker image inspect "${image}" >/dev/null 2>&1; then
+            log_warn "Nao foi possivel baixar a imagem '${image}' (servico ${service}) — sem registry ou acesso negado. Usando a copia local ja existente."
+        else
+            log_error "Falha ao baixar a imagem '${image}' (servico ${service}) e nenhuma copia local foi encontrada."
+            hard_failures+=("${image}")
+        fi
+    done <<< "${services}"
+
+    if (( ${#hard_failures[@]} > 0 )); then
+        log_error "Pull abortado: imagem(ns) indisponivel(is) e sem copia local: ${hard_failures[*]}"
+        return 1
+    fi
+
     log_success "Imagens baixadas"
 }
 
@@ -117,11 +162,51 @@ compose_buildable_services() {
     '
 }
 
-# Resolve a imagem efetiva de um servico (a definida/resultante no compose
-# resolvido) — usada para retaguear apos build com --tag.
+# Resolve a imagem efetiva de UM servico especifico (a definida/resultante
+# no compose resolvido) — usada por compose_pull (checagem de tolerancia do
+# P1) e por commands/build.sh (retag apos --tag/--push).
+#
+# NAO usa `docker compose config --images <servico>` (bug real, medido em
+# E2E com o template moodle): esse subcomando ignora o filtro de servico
+# quando ele tem `depends_on` e retorna as imagens de TODOS os servicos do
+# grafo de dependencias, na ordem do arquivo — um `head -n1` posterior pega
+# a imagem da DEPENDENCIA, nao a do servico pedido. E `--no-deps` nao existe
+# nesse subcomando.
+#
+# Em vez disso, mesma tecnica de `compose_buildable_services`: parseia
+# `docker compose config` (YAML resolvido) por indentacao — dentro de
+# "services:", entra no bloco do servico pedido (chave em 2 espacos) e
+# captura a chave "image:" em 4 espacos DAQUELE bloco, saindo ao entrar no
+# bloco de outro servico. Mesma limitacao conhecida: assume indentacao
+# padrao de 2 espacos por nivel do `docker compose config` atual.
+#
+# Servico sem "image:" (so "build:") -> string vazia. Servico inexistente ->
+# string vazia (quem chama decide o que fazer). Falha real de
+# `compose_exec config` -> propaga rc != 0 sem mensagem (quem chama loga).
 compose_service_image() {
     local service="$1"
-    compose_exec config --images "${service}" 2>/dev/null | head -n1
+    local config
+    if ! config=$(compose_exec config 2>&1); then
+        return 1
+    fi
+
+    echo "${config}" | awk -v target="${service}" '
+        /^services:[[:space:]]*$/ { in_services = 1; next }
+        in_services && /^[A-Za-z0-9_-]+:[[:space:]]*$/ { in_services = 0 }
+        in_services && /^  [A-Za-z0-9._-]+:[[:space:]]*$/ {
+            svc = $1
+            sub(/:$/, "", svc)
+            in_target = (svc == target)
+            next
+        }
+        in_services && in_target && /^    image:/ {
+            img = $0
+            sub(/^    image:[[:space:]]*/, "", img)
+            gsub(/^"|"$/, "", img)
+            print img
+            exit
+        }
+    '
 }
 
 # Build de servico(s) especificos.
