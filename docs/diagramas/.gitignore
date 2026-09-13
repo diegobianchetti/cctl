@@ -1,0 +1,7 @@
+# Variantes de evidencia geradas pelo `archify visual-check` que nao precisam
+# ser versionadas: sao regeneraveis e redundantes para quem le o repositorio.
+# O que fica rastreado e o artefato publicado — a spec `.json`, o HTML
+# interativo, o PNG dark 1440x900 (usado nos embeds do README) e o GIF animado.
+*.visual-check.1440x900.light.png
+*.visual-check.2048x1320.*.png
+*.visual-check.html

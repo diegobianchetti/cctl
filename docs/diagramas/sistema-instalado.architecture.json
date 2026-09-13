@@ -1,0 +1,448 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "cctl instalado: trafego, proxy e slots de rollout",
+    "output": "docs/diagramas/arquitetura-instalado.html",
+    "animation": "trace",
+    "visual_preset": "blueprint",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/diegobianchetti/cctl",
+      "provider": "github",
+      "revision": "2a28cce2090273117aee99353ad14b76dde188bd"
+    },
+    "views": [
+      {
+        "id": "caminho-trafego",
+        "label": "Requisicao ate o slot vivo",
+        "focus": [
+          "cliente",
+          "proxy",
+          "vhost",
+          "slot_blue"
+        ],
+        "note": "Trafego entra no proxy e sai pelo alvo do vhost."
+      },
+      {
+        "id": "troca-slots",
+        "label": "Troca blue/green",
+        "focus": [
+          "vhost",
+          "slot_blue",
+          "slot_green",
+          "state"
+        ],
+        "note": "Sobe o candidato, valida e troca o set $target."
+      },
+      {
+        "id": "versao-declarada",
+        "label": "Versao declarada x versao no ar",
+        "focus": [
+          "env",
+          "registry",
+          "slot_blue",
+          "slot_green"
+        ],
+        "note": "O rollout nao altera o .env por padrao."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "cliente",
+      "type": "external",
+      "label": "Cliente",
+      "sublabel": "navegador HTTPS",
+      "pos": [
+        40,
+        330
+      ],
+      "size": [
+        118,
+        58
+      ]
+    },
+    {
+      "id": "env",
+      "type": "cloud",
+      "label": ".env · project.conf",
+      "sublabel": "versao declarada",
+      "pos": [
+        660,
+        90
+      ],
+      "size": [
+        150,
+        58
+      ],
+      "sources": [
+        {
+          "path": "templates/moodle/docker/.env.template",
+          "line": 23,
+          "label": "MOODLE_APP_TAG"
+        }
+      ]
+    },
+    {
+      "id": "registry",
+      "type": "external",
+      "label": "ghcr.io",
+      "sublabel": "imagens OCI",
+      "tag": "cctl build --push",
+      "pos": [
+        660,
+        590
+      ],
+      "size": [
+        145,
+        58
+      ],
+      "sources": [
+        {
+          "path": "lib/registry.sh",
+          "line": 2,
+          "label": "registry_push"
+        }
+      ]
+    },
+    {
+      "id": "cert",
+      "type": "security",
+      "label": "certificado TLS",
+      "sublabel": "self-signed · ACME",
+      "tag": "cctl ssl",
+      "pos": [
+        215,
+        470
+      ],
+      "size": [
+        140,
+        52
+      ]
+    },
+    {
+      "id": "state",
+      "type": "cloud",
+      "label": ".cctl-rollout",
+      "sublabel": "estado do rollout",
+      "pos": [
+        415,
+        470
+      ],
+      "size": [
+        146,
+        52
+      ],
+      "sources": [
+        {
+          "path": "lib/rollout.sh",
+          "line": 22,
+          "label": "ROLLOUT_STATE_FILE"
+        }
+      ]
+    },
+    {
+      "id": "proxy",
+      "type": "security",
+      "label": "nginx-proxy",
+      "sublabel": "container · 80 · 443",
+      "tag": "cctl proxy up",
+      "pos": [
+        215,
+        330
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "sources": [
+        {
+          "path": "lib/nginx.sh",
+          "line": 121,
+          "label": "nginx_proxy_up"
+        },
+        {
+          "path": "lib/nginx.sh",
+          "line": 214,
+          "label": "nginx_proxy_reload"
+        },
+        {
+          "path": "commands/proxy.sh",
+          "line": 12,
+          "label": "cmd_proxy"
+        }
+      ]
+    },
+    {
+      "id": "vhost",
+      "type": "backend",
+      "label": "vhost do projeto",
+      "sublabel": "nginx/site.conf",
+      "tag": "set $target",
+      "pos": [
+        415,
+        330
+      ],
+      "size": [
+        146,
+        58
+      ],
+      "sources": [
+        {
+          "path": "templates/moodle/nginx/site-nossl.conf.template",
+          "line": 13,
+          "label": "set $target"
+        },
+        {
+          "path": "lib/nginx.sh",
+          "line": 27,
+          "label": "nginx_enable_site"
+        },
+        {
+          "path": "lib/rollout.sh",
+          "line": 352,
+          "label": "_rollout_switch_vhost"
+        }
+      ]
+    },
+    {
+      "id": "slot_blue",
+      "type": "backend",
+      "label": "slot blue",
+      "sublabel": "container do compose",
+      "pos": [
+        700,
+        245
+      ],
+      "size": [
+        146,
+        62
+      ],
+      "sources": [
+        {
+          "path": "templates/moodle/docker/docker-compose.yaml",
+          "line": 36,
+          "label": "image: app"
+        }
+      ]
+    },
+    {
+      "id": "slot_green",
+      "type": "backend",
+      "label": "slot green",
+      "sublabel": "candidato em paralelo",
+      "tag": "override runtime",
+      "pos": [
+        700,
+        430
+      ],
+      "size": [
+        146,
+        62
+      ],
+      "sources": [
+        {
+          "path": "lib/rollout.sh",
+          "line": 477,
+          "label": "_rollout_bring_up_candidate"
+        },
+        {
+          "path": "lib/rollout.sh",
+          "line": 755,
+          "label": "rollout_bluegreen"
+        }
+      ]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "postgres",
+      "sublabel": "moodle-db",
+      "pos": [
+        930,
+        335
+      ],
+      "size": [
+        136,
+        62
+      ],
+      "sources": [
+        {
+          "path": "templates/moodle/docker/docker-compose.yaml",
+          "line": 5,
+          "label": "moodle-db"
+        }
+      ]
+    },
+    {
+      "id": "volumes",
+      "type": "cloud",
+      "label": "volumes nomeados",
+      "sublabel": "dbdata · moodledata",
+      "pos": [
+        1145,
+        245
+      ],
+      "size": [
+        146,
+        58
+      ],
+      "sources": [
+        {
+          "path": "templates/moodle/docker/docker-compose.yaml",
+          "line": 100,
+          "label": "moodledata"
+        }
+      ]
+    },
+    {
+      "id": "marker",
+      "type": "cloud",
+      "label": ".cctl-instance",
+      "sublabel": "instancia instalada",
+      "pos": [
+        1145,
+        430
+      ],
+      "size": [
+        146,
+        52
+      ],
+      "sources": [
+        {
+          "path": "commands/install.sh",
+          "line": 19,
+          "label": "grava .cctl-instance"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "host Linux · Docker CE",
+      "wraps": [
+        "proxy",
+        "cert",
+        "vhost",
+        "slot_blue",
+        "slot_green",
+        "db",
+        "volumes",
+        "env",
+        "state",
+        "marker"
+      ],
+      "pad": 26
+    },
+    {
+      "kind": "security-group",
+      "label": "rede do projeto · bridge com subnet alocada",
+      "wraps": [
+        "proxy",
+        "slot_blue",
+        "slot_green",
+        "db"
+      ],
+      "pad": 18
+    }
+  ],
+  "connections": [
+    {
+      "from": "cliente",
+      "to": "proxy",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "from": "proxy",
+      "to": "vhost",
+      "label": "le config"
+    },
+    {
+      "from": "vhost",
+      "to": "slot_blue",
+      "label": "trafego atual",
+      "variant": "emphasis"
+    },
+    {
+      "from": "vhost",
+      "to": "slot_green",
+      "label": "candidato",
+      "variant": "dashed"
+    },
+    {
+      "from": "slot_blue",
+      "to": "db",
+      "label": "SQL"
+    },
+    {
+      "from": "slot_green",
+      "to": "db",
+      "label": "SQL"
+    },
+    {
+      "from": "db",
+      "to": "volumes",
+      "label": "dados"
+    },
+    {
+      "from": "env",
+      "to": "slot_blue",
+      "label": "imagem declarada",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "registry",
+      "to": "slot_green",
+      "label": "pull",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "from": "cert",
+      "to": "proxy",
+      "label": "TLS",
+      "variant": "security"
+    },
+    {
+      "from": "state",
+      "to": "vhost",
+      "label": "estado do rollout",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Verdade do trafego",
+      "items": [
+        "O vhost vivo manda: set $target define o alvo",
+        "O state file e memoria, nao autoridade",
+        "So 80/443 do proxy sao publicados"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Versao declarada",
+      "items": [
+        "O .env e a fonte da versao do compose",
+        "O rollout NAO altera o .env por padrao",
+        "Sem --persist, um up reverte a versao"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Guardas do rollout",
+      "items": [
+        "Healthcheck antes de tocar o vhost",
+        "nginx -t invalido restaura o backup",
+        "Dreno do slot anterior apos a troca"
+      ]
+    }
+  ]
+}
