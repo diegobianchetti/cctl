@@ -195,6 +195,25 @@ _rollout_parse_args() {
 
 # --- Helpers de slot ----------------------------------------------------------
 
+# Resolve a rede Docker do projeto atual (COMPOSE_PROJECT_NAME), usada para
+# conectar o nginx-proxy durante o bluegreen. Delega para
+# network_list_for_project (lib/network.sh), que ja resolve por label exato
+# do compose com fallback ancorado por nome — um filtro solto por
+# "name=${COMPOSE_PROJECT_NAME}" colidiria com outro projeto cujo nome tem o
+# primeiro como prefixo (ex: "moodle" casando "moodle-lab_..."), a mesma
+# classe do bug B1. Uso: _rollout_project_network
+_rollout_project_network() {
+    local networks network
+    networks="$(network_list_for_project "${COMPOSE_PROJECT_NAME}")"
+    network="$(head -n1 <<< "${networks}")"
+
+    if [[ -n "${network}" && $(wc -l <<< "${networks}") -gt 1 ]]; then
+        log_warn "Mais de uma rede encontrada para o projeto ${COMPOSE_PROJECT_NAME}, usando: ${network}"
+    fi
+
+    echo "${network}"
+}
+
 # Alias de rede do slot. Uso: _rollout_slot_alias <servico> <blue|green>
 _rollout_slot_alias() {
     local service="$1" slot="$2"
@@ -756,7 +775,7 @@ rollout_bluegreen() {
     local vhost="${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf"
 
     local project_network
-    project_network="$(docker network ls --filter "name=${COMPOSE_PROJECT_NAME}" --format "{{.Name}}" | head -1)" || true
+    project_network="$(_rollout_project_network)" || true
     # "(A && B) || true": se B (network_connect_nginx) falhar, A&&B como um
     # todo falha — sob `set -e` de producao isso e um comando solto (nao
     # protegido por if/while), entao sem o "|| true" externo o shell morre

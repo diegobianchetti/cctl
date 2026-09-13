@@ -33,9 +33,9 @@ cmd_clear-all() {
     # Etapa 2/6: Volumes
     msg_step "ETAPA 2/6" "Removendo volumes..."
     local volumes
-    volumes=$(docker volume ls -q --filter "name=${project_name}")
+    volumes=$(volumes_list_for_project "${project_name}")
     if [[ -n "${volumes}" ]]; then
-        echo -e "${BLUE}Volumes encontrados:${RESET}"
+        echo -e "${BLUE}Volumes encontrados (inclui volumes orfaos sem label do compose):${RESET}"
         echo "${volumes}" | sed 's/^/  - /'
         echo "${volumes}" | xargs -r sudo docker volume rm
         msg_success "Volumes removidos"
@@ -46,19 +46,12 @@ cmd_clear-all() {
     # Etapa 3/6: Redes
     msg_step "ETAPA 3/6" "Limpando redes..."
     local project_networks
-    project_networks=$(docker network ls --filter "name=${project_name}" --format "{{.Name}}")
-    local net
-    for net in ${project_networks}; do
-        network_disconnect_nginx "${net}"
-        if docker network rm "${net}" 2>/dev/null; then
-            msg_success "Rede ${net} removida"
-        else
-            msg_warn "Rede ${net} ja removida"
-        fi
-    done
+    project_networks=$(network_list_for_project "${project_name}")
+    network_cleanup_orphans "${project_name}"
 
     # Etapa 4/6: Nginx compose config
     msg_step "ETAPA 4/6" "Atualizando configuracao do Nginx..."
+    local net
     for net in ${project_networks}; do
         nginx_remove_network_config "${net}"
     done

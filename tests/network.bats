@@ -6,11 +6,34 @@ setup() {
     load_bats_libs
     setup_mock_bin
     source_lib colors.sh log.sh network.sh
+
+    WORKDIR="$(make_tmp_workdir)"
+    cd "${WORKDIR}" || return 1
 }
 
 teardown() {
     teardown_mock_bin
+    [[ -n "${WORKDIR:-}" && -d "${WORKDIR}" ]] && rm -rf "${WORKDIR}"
     true
+}
+
+@test "network_list_for_project (uniao, regressao Blocker 2): rotulada E orfa sem label aparecem as duas" {
+    # moodle_network tem label do compose; moodle_extra foi recriada a mao
+    # e ficou sem label, mas casa o prefixo ancorado "^moodle_". Com o
+    # antigo `if [[ -z ]]`, moodle_extra desaparece porque o ramo por
+    # label ja devolveu algo.
+    declare -A CCTL_TEST_NETS=(
+        [moodle_network]="moodle"
+        [moodle_extra]=""
+        [moodle-lab_network]="moodle-lab"
+    )
+    mock_docker_with_networks CCTL_TEST_NETS "${WORKDIR}/docker_calls.log"
+
+    run network_list_for_project "moodle"
+    assert_success
+    assert_output --partial "moodle_network"
+    assert_output --partial "moodle_extra"
+    refute_output --partial "moodle-lab_network"
 }
 
 @test "network_allocate_subnet: retorna a primeira subnet livre no range" {

@@ -143,7 +143,7 @@ cmd_build() {
             local eff_tag="${tag:-latest}"
             local src_image ref
             for svc in "${targets[@]}"; do
-                src_image="$(compose_service_image "${svc}")"
+                src_image="$(compose_service_image "${svc}")" || src_image=""
                 if [[ -z "${src_image}" ]]; then
                     log_error "Nao foi possivel resolver a imagem do servico '${svc}' apos o build."
                     return 1
