@@ -20,7 +20,7 @@ _cctl_completions() {
     local all_commands="init install up down start stop restart ps logs status
                         network volumes config connect build update backup list
                         db-check-config db-update-config clear-volumes clear-all
-                        destroy proxy ssl help"
+                        destroy proxy ssl rollout help"
 
     # Opcoes globais
     local global_opts="--version --help --verbose -v -h"
@@ -137,6 +137,43 @@ _cctl_completions() {
                 COMPREPLY=( $(compgen -W "status issue renew help" -- "${cur}") )
             else
                 COMPREPLY=()
+            fi
+            ;;
+
+        rollout)
+            # Acao (bluegreen/rolling/status/help) + flags conforme a acao
+            local pos_count=0
+            local i
+            for (( i=1; i < COMP_CWORD; i++ )); do
+                [[ "${COMP_WORDS[i]}" != -* ]] && (( pos_count++ )) || true
+            done
+
+            local rollout_action=""
+            for (( i=1; i < COMP_CWORD; i++ )); do
+                if [[ "${COMP_WORDS[i]}" != -* ]]; then
+                    rollout_action="${COMP_WORDS[i]}"
+                    break
+                fi
+            done
+
+            if (( pos_count == 1 )); then
+                COMPREPLY=( $(compgen -W "bluegreen rolling status help" -- "${cur}") )
+            else
+                case "${prev}" in
+                    --service|--image|--timeout|--health-path|--health-port|--drain)
+                        COMPREPLY=()
+                        ;;
+                    --health-mode)
+                        COMPREPLY=( $(compgen -W "auto docker http" -- "${cur}") )
+                        ;;
+                    *)
+                        local rollout_opts="--service --image --health-mode --timeout --health-path --health-port"
+                        if [[ "${rollout_action}" == "bluegreen" ]]; then
+                            rollout_opts="${rollout_opts} --drain --keep-old"
+                        fi
+                        COMPREPLY=( $(compgen -W "${rollout_opts}" -- "${cur}") )
+                        ;;
+                esac
             fi
             ;;
 

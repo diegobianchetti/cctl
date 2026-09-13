@@ -2,6 +2,11 @@
 .env
 .cctl-instance
 
+# Estado/override runtime do rollout Blue/Green (gerados durante
+# `cctl rollout`, nunca versionados — ver lib/rollout.sh)
+.cctl-rollout
+docker-compose.rollout.yaml
+
 # Arquivos de sessão local (não vão para o repositório público)
 WORK_LOG.md
 CLAUDE.md
