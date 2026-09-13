@@ -17,6 +17,20 @@ fluxo reproduzível:
    sobe os containers, instala crons e registra o vhost no proxy reverso
 3. **Operações do dia a dia**: `ps`, `logs`, `backup`, `connect`, `update` e mais
 
+## Arquitetura
+
+Como uma instância fica depois do `cctl install`: proxy nginx compartilhado,
+vhost como fonte da verdade do tráfego (`set $target`), slots blue/green do
+rollout, banco, volumes nomeados e os três arquivos que guardam estado
+(`.env`, `.cctl-rollout`, `.cctl-instance`).
+
+![Arquitetura do sistema instalado](docs/diagramas/arquitetura-instalado.dark.gif)
+
+A versão interativa (zoom, detalhes por nó) está em
+[`docs/diagramas/arquitetura-instalado.html`](docs/diagramas/arquitetura-instalado.html)
+— abra localmente após clonar o repositório (o GitHub não executa HTML/JS
+embutido no README).
+
 ## Pré-requisitos
 
 - Docker Engine 24+
@@ -33,12 +47,38 @@ cd cctl
 
 # Opcional: disponibilizar globalmente
 sudo ln -s "$(pwd)/cctl" /usr/local/bin/cctl
-source cctl-completion.bash   # autocomplete
 ```
+
+### Autocomplete
+
+O `cctl` completa comandos, subcomandos, serviços, templates e as flags de
+`build`/`rollout`/`ssl`/`proxy`:
+
+```bash
+# Opção 1 — system-wide (todos os usuários, todos os shells novos)
+sudo apt-get install -y bash-completion    # se ainda não estiver instalado
+sudo install -m 0644 cctl-completion.bash /etc/bash_completion.d/cctl
+
+# Opção 2 — só para o seu usuário, persistente entre sessões
+echo "source $(pwd)/cctl-completion.bash" >> ~/.bashrc
+
+# Opção 3 — apenas na sessão atual
+source cctl-completion.bash
+```
+
+A opção 1 exige o pacote `bash-completion`: sem ele, `/etc/bash_completion.d/`
+nunca é carregado e o arquivo fica inerte (sem erro visível).
+
+> O `cctl` avisa quando o autocomplete não está carregado, **mas apenas no
+> contexto de template** (fora de um projeto/instância) — dentro de uma instância
+> o aviso não aparece. Se `cctl <TAB>` não completar, é porque a completion não
+> foi carregada naquele shell.
 
 ## Fluxo de uso
 
 ### 1. Inicialização (na máquina local)
+
+![Fluxo do cctl init](docs/diagramas/fluxo-init.dark.gif)
 
 ```bash
 cctl init moodle moodle-acme
@@ -139,24 +179,9 @@ ansible-playbook -i <seu-inventory>.yml playbooks/docker-setup.yml \
 
 Sem isso, `docker` só funciona com `sudo` dentro da VM.
 
-### 3. Subir o nginx-proxy na VM
+### 3. Clonar e disponibilizar o cctl
 
 Dentro da VM (`vagrant ssh`):
-
-```bash
-sudo mkdir -p /etc/nginx-proxy/vhosts.d
-git clone https://github.com/diegobianchetti/nginx-proxy.git /opt/nginx-proxy
-cd /opt/nginx-proxy
-cp .env.example .env
-docker compose up -d
-```
-
-Valide o catch-all antes de seguir — `curl http://localhost` deve fechar a conexão
-sem resposta (`return 444`), sinal de que o proxy está de pé e sem vhosts ainda.
-
-### 4. Clonar e disponibilizar o cctl
-
-Ainda dentro da VM:
 
 ```bash
 git clone https://github.com/diegobianchetti/cctl.git
@@ -164,6 +189,27 @@ cd cctl
 sudo ln -s "$(pwd)/cctl" /usr/local/bin/cctl
 source cctl-completion.bash
 ```
+
+### 4. Subir o proxy nginx compartilhado
+
+`cctl proxy` fica disponível em qualquer contexto (repositório do cctl,
+diretório de projeto ou instância) — não precisa estar em nenhum diretório
+específico:
+
+```bash
+cctl proxy up
+```
+
+Isso cria a rede Docker compartilhada (`PROXY_NETWORK`, default
+`cctl-proxy-net`), os diretórios de vhosts/certificados
+(`NGINX_VHOSTS_DIR`, `SSL_CERTS_DIR`, `CERTBOT_WEBROOT_DIR`,
+`LETSENCRYPT_DIR`) e sobe o container `nginx-proxy` a partir de
+`NGINX_PROXY_IMAGE` (default `ghcr.io/diegobianchetti/nginx-proxy:latest`).
+
+Valide o catch-all antes de seguir — `curl http://localhost` deve fechar a conexão
+sem resposta (`return 444`), sinal de que o proxy está de pé e sem vhosts ainda.
+Use `cctl proxy status` para conferir container, saúde, portas e rede a
+qualquer momento.
 
 ### 5. Inicializar e instalar o projeto
 
@@ -233,17 +279,69 @@ vagrant destroy -f
 | `volumes` | Lista volumes e bind mounts |
 | `list` | Lista instâncias instaladas no servidor |
 
+### SSL
+
+| Comando | Descrição |
+|---------|-----------|
+| `ssl status [domínio]` | Modo SSL, caminho do certificado e data de expiração |
+| `ssl issue [domínio]` | Emite/instala o certificado conforme `SSL_MODE` |
+| `ssl renew [domínio]` | Renova o certificado conforme `SSL_MODE` |
+
+Domínio é opcional — usa `DOMAIN_NAME` do manifest quando omitido. Modos
+suportados em `SSL_MODE` (`project.conf`): `self-signed` (par autoassinado via
+OpenSSL, dev/homologação), `letsencrypt` (Certbot via webroot compartilhado
+com o proxy), `manual` (certificados fornecidos pelo usuário via
+`SSL_CERT_FILE`/`SSL_KEY_FILE`) e `none` (sem SSL, fallback HTTP puro).
+
+### Proxy nginx compartilhado
+
+| Comando | Descrição |
+|---------|-----------|
+| `proxy up` | Sobe a infraestrutura do proxy (rede + diretórios + container) |
+| `proxy down` | Para e remove o container do proxy |
+| `proxy reload` | Testa e recarrega a configuração nginx |
+| `proxy test` | Testa a sintaxe da configuração (todos os vhosts) |
+| `proxy logs [flags]` | Encaminha argumentos extras para `docker logs` |
+| `proxy status` | Status do container, saúde, portas e rede |
+
+Disponível em qualquer contexto (repositório do cctl, projeto ou instância) —
+gerencia o container `nginx-proxy` compartilhado por todas as instâncias do
+host.
+
+### Rollout (Blue/Green)
+
+| Comando | Descrição |
+|---------|-----------|
+| `rollout bluegreen [--service <svc>] [--image <ref>] [opções]` | Sobe a versão candidata em slot paralelo, testa a saúde e troca o tráfego no nginx sem downtime |
+| `rollout rolling [--service <svc>] [--image <ref>] [opções]` | Recreate seguro do slot atual (mesmo alias), com rollback automático se o healthcheck falhar |
+| `rollout status [--service <svc>]` | Slot live, container, saúde, alvo do vhost e imagem em uso |
+| `rollout help` | Exibe o uso sintético de `cctl rollout` |
+
+Opções comuns aos dois modos: `--health-mode auto|docker|http`, `--timeout <s>`,
+`--health-path <p>`, `--health-port <p>`. Exclusivas do `bluegreen`: `--drain <s>`
+(segundos de dreno antes de derrubar o slot antigo) e `--keep-old` (não derruba
+o slot anterior). Detalhes do modelo de slots, limitações conhecidas e exemplo
+completo em [docs/USAGE.md](docs/USAGE.md#rollout-bluegreen).
+
 ### Manutenção
 
 | Comando | Descrição |
 |---------|-----------|
 | `connect <serviço>` | Abre shell no container do serviço |
-| `build` | Build/rebuild de imagens locais |
+| `build [serviço...]` | Build/rebuild de imagens (todas as com `build:` no compose, ou só as indicadas) |
+| `build --no-cache` \| `--pull` | Repassa a flag ao `docker compose build` |
+| `build -t/--tag <tag>` | Aplica tag customizada às imagens construídas |
+| `build --custom <serviço>` | Build via Dockerfile customizado do projeto (`docker/custom/<serviço>/Dockerfile`, override em `CUSTOM_BUILD_DIR`) |
+| `build --push [--registry <url>]` | Publica as imagens construídas/taggeadas no registry (default `${CCTL_REGISTRY:-ghcr.io/${DOCKER_OWNER}}`) |
 | `update` | Pull de imagens e recria containers |
 | `backup` | Executa backup do ambiente |
 | `config` | Exibe configuração resolvida |
 | `db-check-config` | Verifica config customizada do banco |
 | `db-update-config` | Aplica config customizada no banco |
+
+Credenciais de push: `CCTL_REGISTRY_USER` + `CCTL_REGISTRY_TOKEN` (ou
+`GHCR_TOKEN`/`DOCKER_TOKEN`), nunca como argumento de linha de comando.
+Detalhes em [docs/USAGE.md](docs/USAGE.md#build-de-imagens-customizadas-cctl-build).
 
 ### Limpeza (destrutivo)
 
@@ -287,8 +385,8 @@ comandos disponíveis para aquele contexto:
 
 | Contexto | Condição | Comandos disponíveis |
 |----------|----------|----------------------|
-| Repositório cctl | fora de projeto/instância | `init` |
-| Diretório de projeto (pré-install) | `project.conf` presente, sem `.cctl-instance` | `install` |
+| Repositório cctl | fora de projeto/instância | `init`, `proxy` |
+| Diretório de projeto (pré-install) | `project.conf` presente, sem `.cctl-instance` | `install`, `ssl`, `proxy` |
 | Instância instalada | `.cctl-instance` presente | todos os operacionais |
 
 ## Templates disponíveis
@@ -309,7 +407,12 @@ O cctl roda em servidores que muitas vezes têm apenas o mínimo instalado.
 Dependências externas viram pré-requisito de instalação — e pré-requisito de
 manutenção. Bash 5 + coreutils cobrem tudo que o cctl precisa: parsing de
 variáveis, manipulação de strings, chamadas a `docker`. A única dependência
-real é o Docker, que já é o pré-requisito do próprio workload.
+real é o Docker, que já é o pré-requisito do próprio workload. O `jq` foi o
+último resquício disso — usado de forma opcional em `cctl volumes` para
+listar bind mounts — e saiu de circulação: `lib/volumes.sh` parseia o YAML
+resolvido de `docker compose config` por indentação, mesma técnica já usada
+por `compose_buildable_services`/`compose_service_image` (`lib/compose.sh`)
+para achar serviços com `build:` e resolver a imagem de um serviço.
 
 ### Por que um diretório por projeto em vez de branches git?
 

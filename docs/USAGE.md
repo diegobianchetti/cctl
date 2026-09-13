@@ -36,9 +36,9 @@ O `cctl` detecta automaticamente onde esta sendo executado e libera apenas os co
 
 | Contexto | Deteccao | Comandos disponiveis |
 |----------|----------|---------------------|
-| **template** | Diretorio `templates/` presente | `init`, `help` |
-| **client_branch** | `project.conf` presente, sem `.cctl-instance` | `install`, `help` |
-| **instance** | `.cctl-instance` presente | Todos os operacionais (up, down, logs, backup...) |
+| **template** | Diretorio `templates/` presente (repositorio do cctl) | `init`, `proxy`, `help` |
+| **project** | `project.conf` presente, sem `.cctl-instance` | `install`, `ssl`, `proxy`, `help` |
+| **instance** | `.cctl-instance` presente | Todos os operacionais (up, down, logs, backup, ssl, proxy, rollout...) |
 
 ### Manifest (project.conf)
 
@@ -53,48 +53,80 @@ Cada template tem um `project.conf` que declara tudo sobre o projeto: compose fi
 
 ## Fluxo completo
 
-### Passo 1: Inicializar (maquina local)
+![Fluxo do cctl init](diagramas/fluxo-init.dark.gif)
 
-Roda no repositorio de templates (branch `main`):
+Versoes interativas (zoom, detalhes por no) dos diagramas desta secao estao
+em `docs/diagramas/*.html` — abra localmente apos clonar o repositorio (o
+GitHub nao executa HTML/JS embutido em Markdown).
+
+### Passo 1: Inicializar (maquina local ou servidor)
+
+`cctl init` roda em qualquer diretorio, a partir do `cctl` disponibilizado
+globalmente (symlink) ou do proprio repositorio clonado:
 
 ```bash
-cd /caminho/do/repo/containers-control
+cctl init <template> <nome> [--domain <dominio>] [--dest <caminho>]
 
-./cctl init --project <tipo> --client <nome> --domain <dominio>
+# Exemplo:
+cctl init moodle moodle-acme --domain moodle.acme.example.br
 ```
 
-O que acontece:
-1. Cria branch git `<tipo>-<nome>` a partir de `main`
-2. Copia o template escolhido para a raiz da branch
-3. Remove o diretorio `templates/`
-4. Preenche `CLIENT_NAME`, `DOMAIN_NAME` e `COMPOSE_PROJECT_NAME` no `.env`
-5. Commit + push automatico
+Sem `--dest`, o comando pergunta o diretorio de destino (diretorio atual,
+`/opt/<nome>` ou um caminho customizado); sem `--domain`, pergunta o dominio
+(Enter pula e deixa para editar depois no `.env`).
 
-Ao final, imprime as instrucoes para instalar no servidor.
+O que acontece (ver `commands/init.sh`):
+1. Valida o nome do projeto e o template (`templates/<tipo>/`)
+2. Cria o diretorio de destino e copia o template inteiro
+3. Copia `docker/.env.template` para `docker/.env` e renderiza os
+   placeholders `_CLIENT_NAME_`/`_COMPOSE_PROJECT_NAME_`/`_DOMAIN_NAME_` no
+   `.env` e no `project.conf`
+4. Gera um vhost nginx de referencia em `nginx/<nome>.conf` (so se o dominio
+   foi informado)
+
+**Nao ha nenhuma automacao de git** — sem branch, sem commit, sem push. O
+`init` so copia arquivos e renderiza texto; o versionamento do diretorio
+gerado (se houver) e decisao do usuario, em qualquer repositorio que queira.
+
+Ao final, imprime o proximo passo (`cd <dest>`, revisar o `.env`, `cctl install`).
 
 ### Passo 2: Instalar (servidor)
 
-No servidor de producao:
+![Fluxo do cctl install](diagramas/fluxo-install.dark.gif)
+
+No servidor de producao, dentro do diretorio gerado pelo `init`:
 
 ```bash
-cd /var/docker
-git clone --branch <tipo>-<nome> --single-branch <URL_DO_REPO> <tipo>-<nome>
-cd <tipo>-<nome>
-./cctl install
+cd /opt/moodle-acme
+vi docker/.env       # revisar antes de instalar
+cctl install
 ```
 
-O que acontece:
-1. Gera senhas automaticas (definidas em `AUTO_PASSWORD_VARS`)
-2. Aloca subnet Docker livre no range configurado
-3. Renderiza templates (nginx, cron) com as variaveis do `.env`
-4. Valida pre-requisitos (docker, disco, portas)
-5. Pull das imagens do registry
-6. Sobe os containers (`docker compose up -d`)
-7. Configura nginx no host (se `HOST_NGINX=true`)
-8. Emite certificado SSL (se `HOST_SSL=true`)
-9. Instala cron jobs (se `HOST_CRON=true`)
-10. Executa hook pos-instalacao
-11. Grava `.cctl-instance` (marca como instalado)
+O que acontece (a ordem e a dos passos numerados em `commands/install.sh`):
+1. Limpa rede orfa deixada por uma instalacao/`down` anterior que falhou
+2. Gera senhas automaticas (definidas em `AUTO_PASSWORD_VARS`)
+3. Aloca subnet Docker livre no range configurado
+4. Renderiza templates (nginx, cron) com as variaveis do `.env`
+5. Recarrega o `.env` com as senhas e a subnet ja geradas
+6. Valida pre-requisitos: **docker, espaco em disco e DNS do `DOMAIN_NAME`**
+   (dominios `localhost`, `*.local` e `*.test` sao pulados; um dominio que
+   nao resolva — nem por DNS nem por `/etc/hosts` — **aborta o install**)
+7. Pull das imagens do registry
+8. Build condicional (so se algum servico do compose tiver contexto `build:`)
+9. Sobe os containers (`docker compose up -d`)
+10. Emite o certificado SSL (se `HOST_SSL=true`)
+11. Configura nginx no host (se `HOST_NGINX=true`)
+12. Instala cron jobs (se `HOST_CRON=true`)
+13. Executa hook pos-instalacao
+14. Grava `.cctl-instance` (marca como instalado)
+
+> **SSL vem antes do nginx, de proposito:** o vhost final so e testado com
+> `nginx -t` depois que o certificado existe. Quando o modo e `letsencrypt` e o
+> certificado ainda nao foi emitido, o install publica um vhost HTTP temporario
+> so para o desafio ACME e depois troca pelo definitivo.
+>
+> O pre-flight **nao** verifica portas: `validate_port_available` existe em
+> `lib/validate.sh` mas nao e chamada pelo `install`.
 
 ### Passo 3: Operar (servidor)
 
@@ -114,8 +146,10 @@ Apos instalado, todos os comandos operacionais ficam disponiveis:
 
 | Comando | Descricao |
 |---------|-----------|
-| `cctl init --project <tipo> --client <nome> --domain <dominio>` | Cria branch de cliente a partir de um template |
+| `cctl init <template> <nome> [--domain <dominio>] [--dest <caminho>]` | Copia o template para um diretorio novo e renderiza `.env`/`project.conf`/vhost. Sem automacao de git |
 | `cctl install` | Instala a instancia no servidor (deploy completo) |
+| `cctl ssl <status\|issue\|renew> [dominio]` | Gerencia o certificado SSL conforme `SSL_MODE` |
+| `cctl proxy <up\|down\|reload\|test\|logs\|status>` | Gerencia o proxy nginx compartilhado (disponivel em qualquer contexto) |
 
 ### Ciclo de vida
 
@@ -137,6 +171,42 @@ Apos instalado, todos os comandos operacionais ficam disponiveis:
 | `cctl network` | Detalhes da rede Docker (subnet, IPs alocados) |
 | `cctl volumes` | Lista volumes e bind mounts |
 | `cctl config` | Exibe configuracao resolvida |
+
+### SSL
+
+| Comando | Descricao |
+|---------|-----------|
+| `cctl ssl status [dominio]` | Modo SSL, caminho do certificado e data de expiracao |
+| `cctl ssl issue [dominio]` | Emite/instala o certificado conforme `SSL_MODE` |
+| `cctl ssl renew [dominio]` | Renova o certificado conforme `SSL_MODE` |
+| `cctl ssl help` | Exibe esta ajuda |
+
+Dominio e opcional em todas as acoes — usa `DOMAIN_NAME` do manifest quando
+omitido. Disponivel em contexto `instance` e `project`. Modos suportados em
+`SSL_MODE` (`project.conf`):
+
+| Modo | Descricao |
+|------|-----------|
+| `self-signed` | Par autoassinado gerado na hora via OpenSSL (dev/homologacao) |
+| `letsencrypt` | Certbot via webroot compartilhado com o proxy |
+| `manual` | Certificados fornecidos pelo usuario (`SSL_CERT_FILE`/`SSL_KEY_FILE`) |
+| `none` | Sem SSL — fallback puramente HTTP |
+
+### Proxy nginx compartilhado
+
+| Comando | Descricao |
+|---------|-----------|
+| `cctl proxy up` | Sobe a infraestrutura do proxy (rede + diretorios + container) |
+| `cctl proxy down` | Para e remove o container do proxy |
+| `cctl proxy reload` | Testa e recarrega a configuracao nginx |
+| `cctl proxy test` | Testa a sintaxe da configuracao (todos os vhosts) |
+| `cctl proxy logs [flags]` | Encaminha argumentos extras para `docker logs` |
+| `cctl proxy status` | Status do container, saude, portas e rede |
+
+Disponivel em qualquer contexto (`template`, `project`, `instance` ou
+desconhecido) — gerencia o container `nginx-proxy` (`NGINX_PROXY_IMAGE`,
+default `ghcr.io/diegobianchetti/nginx-proxy:latest`) compartilhado por todas
+as instancias do host, na rede `PROXY_NETWORK` (default `cctl-proxy-net`).
 
 ### Acesso e manutencao
 
@@ -233,13 +303,12 @@ cctl rollout rolling --service moodle-app --image ghcr.io/acme/moodle-app:2.5.2
 ### DSpace
 
 ```bash
-# Local — criar branch para o cliente:
-./cctl init --project dspace --client acme --domain repositorio.acme.example.com
+# Local ou servidor — inicializar o diretorio do projeto:
+cctl init dspace dspace-acme --domain repositorio.acme.example.com
 
-# Servidor — instalar:
-cd /var/docker
-git clone --branch dspace-acme --single-branch git@github.com:usuario/cctl.git dspace-acme
-cd dspace-acme
+# Servidor — instalar (dentro do diretorio gerado pelo init, ou apos copia-lo
+# para o servidor por qualquer meio — scp, git do usuario, rsync):
+cd /opt/dspace-acme
 ./cctl install
 
 # Operacao:
@@ -255,13 +324,11 @@ Servicos DSpace: `dspace` (backend), `dspace-angular` (frontend), `dspacedb` (Po
 ### Moodle
 
 ```bash
-# Local:
-./cctl init --project moodle --client acme --domain moodle.acme.example.com
+# Local ou servidor — inicializar o diretorio do projeto:
+cctl init moodle moodle-acme --domain moodle.acme.example.com
 
-# Servidor:
-cd /var/docker
-git clone --branch moodle-acme --single-branch git@github.com:usuario/cctl.git moodle-acme
-cd moodle-acme
+# Servidor — instalar:
+cd /opt/moodle-acme
 ./cctl install
 
 # Operacao:
@@ -433,12 +500,15 @@ O `cctl install` so pode ser executado uma vez. Use `cctl up/down/restart` para 
 
 ### Problemas com nginx
 
-```bash
-# Testar config manualmente:
-docker compose -p nginx exec nginx nginx -t
+O proxy nao e um projeto compose: ele sobe por `docker run --name nginx-proxy`
+(ver `nginx_proxy_up` em `lib/nginx.sh`), entao comandos do tipo
+`docker compose -p nginx exec ...` **nao funcionam**. Use o subcomando:
 
-# Ver logs:
-docker compose -p nginx exec nginx tail -f /var/log/nginx/error-<dominio>.log
+```bash
+cctl proxy test          # valida a config (docker exec nginx-proxy nginx -t)
+cctl proxy logs -f       # acompanha os logs (args repassados ao docker logs)
+cctl proxy reload        # recarrega a config sem derrubar o container
+cctl proxy status        # container, saude, portas e rede do proxy
 ```
 
 ### Reset completo (perda de dados!)
