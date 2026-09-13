@@ -39,6 +39,12 @@ cmd_install() {
     echo -e "  Dominio: ${CYAN}${DOMAIN_NAME:-?}${RESET}"
     echo ""
 
+    # 2b. Limpa rede orfa de uma instalacao/down anterior que tenha falhado
+    # antes de desconectar o nginx-proxy (ver network_cleanup_orphans em
+    # lib/network.sh) — sem isso, a rede orfa fica com o proxy conectado e
+    # o "docker compose up" seguinte pode reaproveitar/colidir com ela.
+    _install_cleanup_orphan_network
+
     # 3. Gera senhas
     passwords_generate_all
 
@@ -58,7 +64,7 @@ cmd_install() {
     validate_preflight_install || return 1
 
     # 8. Pull imagens
-    compose_pull
+    compose_pull || return 1
 
     # 9. Build (se necessario)
     _install_build_if_needed
@@ -112,6 +118,20 @@ _install_set_ssl_paths() {
     env_set_var "SSL_KEY_PATH" "${key_path}"
 }
 
+# Remove rede orfa do projeto (com o nginx-proxy ainda preso nela) deixada
+# por uma instalacao/down anterior que falhou antes de desconectar o proxy
+# — para que um `cctl install` logo apos um `install` malsucedido tambem se
+# recupere, em vez de herdar a rede velha. Sem COMPOSE_PROJECT_NAME (nao
+# deveria acontecer a essa altura, ja carregado do manifest) e um no-op.
+_install_cleanup_orphan_network() {
+    if [[ -z "${COMPOSE_PROJECT_NAME:-}" ]]; then
+        return 0
+    fi
+
+    msg_step "REDE" "Verificando rede orfa de instalacao anterior..."
+    network_cleanup_orphans "${COMPOSE_PROJECT_NAME}"
+}
+
 # Aloca subnet e seta no .env
 _install_allocate_subnet() {
     msg_step "SUBNET" "Alocando subnet..."
@@ -143,9 +163,15 @@ _install_nginx() {
     msg_step "NGINX" "Configurando Nginx..."
 
     # Conecta a rede antes de testar o config (resolver Docker precisa da rede)
-    local project_network
-    project_network=$(docker network ls --filter "name=${COMPOSE_PROJECT_NAME}" --format "{{.Name}}" | head -1)
-    if [[ -n "${project_network}" ]]; then
+    local project_networks project_network
+    project_networks=$(network_list_for_project "${COMPOSE_PROJECT_NAME}")
+    project_network=$(head -n1 <<< "${project_networks}")
+    if [[ -z "${project_network}" ]]; then
+        log_warn "Nenhuma rede encontrada para o projeto ${COMPOSE_PROJECT_NAME}, pulando conexao do nginx-proxy"
+    else
+        if [[ $(wc -l <<< "${project_networks}") -gt 1 ]]; then
+            log_warn "Mais de uma rede encontrada para o projeto ${COMPOSE_PROJECT_NAME}, usando: ${project_network}"
+        fi
         network_connect_nginx "${project_network}"
     fi
 
@@ -237,9 +263,15 @@ server {
 }
 EOF
 
-    local project_network
-    project_network=$(docker network ls --filter "name=${COMPOSE_PROJECT_NAME}" --format "{{.Name}}" | head -1)
-    if [[ -n "${project_network}" ]]; then
+    local project_networks project_network
+    project_networks=$(network_list_for_project "${COMPOSE_PROJECT_NAME}")
+    project_network=$(head -n1 <<< "${project_networks}")
+    if [[ -z "${project_network}" ]]; then
+        log_warn "Nenhuma rede encontrada para o projeto ${COMPOSE_PROJECT_NAME}, pulando conexao do nginx-proxy"
+    else
+        if [[ $(wc -l <<< "${project_networks}") -gt 1 ]]; then
+            log_warn "Mais de uma rede encontrada para o projeto ${COMPOSE_PROJECT_NAME}, usando: ${project_network}"
+        fi
         network_connect_nginx "${project_network}"
     fi
 

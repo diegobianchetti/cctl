@@ -327,6 +327,40 @@ _run_strict() {
 }
 
 # =============================================================================
+# 0. _rollout_project_network (classe B1: colisao de prefixo de nome de
+#    projeto, ex. "moodle" vs "moodle-lab") — a linha usada por
+#    rollout_bluegreen para decidir a que rede conectar o nginx-proxy antes
+#    do switch. O mock generico _mock_docker_rollout (ver acima) ignora o
+#    filtro recebido por "docker network ls" e por isso nao serve para
+#    provar este caso — aqui trocamos por mock_docker_with_networks, que
+#    interpreta o filtro de verdade (label exato / name ancorado / name
+#    solto), o mesmo padrao ja usado em tests/down.bats.
+# =============================================================================
+
+@test "_rollout_project_network (regressao B1): projeto 'moodle' resolve a rede certa, nao a de 'moodle-lab'" {
+    export COMPOSE_PROJECT_NAME="moodle"
+    declare -A CCTL_TEST_NETS=(
+        [moodle_network]=""
+        [moodle-lab_moodle-network]=""
+    )
+    mock_docker_with_networks CCTL_TEST_NETS "${WORKDIR}/docker_calls.log"
+
+    run _rollout_project_network
+    assert_success
+    assert_output "moodle_network"
+}
+
+@test "_rollout_project_network: com label exato do compose, resolve pelo label" {
+    export COMPOSE_PROJECT_NAME="moodle"
+    declare -A CCTL_TEST_NETS=( [moodle_network]="moodle" [moodle-lab_moodle-network]="moodle-lab" )
+    mock_docker_with_networks CCTL_TEST_NETS "${WORKDIR}/docker_calls.log"
+
+    run _rollout_project_network
+    assert_success
+    assert_output "moodle_network"
+}
+
+# =============================================================================
 # 1. bluegreen feliz (live=blue)
 # =============================================================================
 

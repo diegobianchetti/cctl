@@ -17,7 +17,7 @@ setup() {
     unset COMPOSE_FILES CCTL_REGISTRY CCTL_REGISTRY_USER CCTL_REGISTRY_TOKEN \
         GHCR_TOKEN DOCKER_TOKEN DOCKER_OWNER CUSTOM_BUILD_DIR MOCK_BUILD_FAIL \
         MOCK_DOCKERBUILD_FAIL MOCK_LOGIN_FAIL MOCK_PUSH_FAIL \
-        MOCK_COMPOSE_CONFIG_FAIL 2>/dev/null || true
+        MOCK_COMPOSE_CONFIG_FAIL MOCK_CONFIG_RAW_FAIL 2>/dev/null || true
 
     # HOME isolado sem ~/.docker/config.json (sem sessao previa de login)
     export HOME="${WORKDIR}/home"
@@ -51,23 +51,36 @@ setup() {
                     elif [[ "${rest[0]:-}" == "--services" ]]; then
                         printf "web\napp\ndb\n"
                         exit 0
+                    elif [[ -z "${rest[0]:-}" && -n "${MOCK_CONFIG_RAW_FAIL:-}" ]]; then
+                        # falha so no "docker compose config" cru (sem
+                        # --services/--images) — o servico existe e o build
+                        # roda normalmente, mas a resolucao de imagem no
+                        # retag (commands/build.sh:146) quebra (B3)
+                        echo "erro simulado: config cru quebrado apos o build" >&2
+                        exit 1
                     elif [[ "${rest[0]:-}" == "--images" ]]; then
+                        # legado — nao usado mais por compose_service_image
+                        # (ver bug real documentado em lib/compose.sh), mantido
+                        # so pra nao quebrar quem ainda chamar --images direto.
                         echo "src-${rest[1]}:built"
                         exit 0
                     else
                         # docker compose config (YAML resolvido, sem args) —
                         # so "app" tem contexto de build; "web" e "db" so tem
                         # 'image:' (o caso de um servico de terceiro, ex db).
+                        # As imagens de "app" simulam a imagem ja construida
+                        # localmente (src-app:built) que compose_service_image
+                        # precisa resolver corretamente antes do retag.
                         cat <<'YAML'
 services:
   web:
-    image: nginx:latest
+    image: src-web:built
   app:
     build:
       context: .
-    image: testproj-app:latest
+    image: src-app:built
   db:
-    image: postgres:16
+    image: src-db:built
 YAML
                         exit 0
                     fi
@@ -458,6 +471,35 @@ teardown() {
     assert_failure
 }
 
+@test "B3 (commands/build.sh:146) sob 'set -euo pipefail' real: 'docker compose config' quebrado apos o build nao mata o shell mudo" {
+    # Antes do fix, "src_image=\"$(compose_service_image \"\${svc}\")\"" e
+    # uma atribuicao simples — sob set -e, o rc!=0 da substituicao (config
+    # cru quebrado) matava o shell ANTES do "if [[ -z ... ]]" e do
+    # log_error da linha seguinte rodarem: o retag do build morria com rc=1
+    # e nenhuma mensagem. Com "|| src_image=\"\"", o log_error roda.
+    export MOCK_CONFIG_RAW_FAIL=1
+
+    local script="${WORKDIR}/_strict_build.sh"
+    {
+        echo '#!/usr/bin/env bash'
+        echo 'set -euo pipefail'
+        printf 'CCTL_ROOT=%q\n' "${CCTL_ROOT}"
+        printf 'COMPOSE_PROJECT_NAME=%q\n' "${COMPOSE_PROJECT_NAME}"
+        echo 'source "${CCTL_ROOT}/lib/colors.sh"'
+        echo 'source "${CCTL_ROOT}/lib/log.sh"'
+        echo 'source "${CCTL_ROOT}/lib/validate.sh"'
+        echo 'source "${CCTL_ROOT}/lib/compose.sh"'
+        echo 'source "${CCTL_ROOT}/lib/registry.sh"'
+        echo 'source "${CCTL_ROOT}/commands/build.sh"'
+        echo 'cmd_build app --tag v1'
+    } > "${script}"
+    chmod +x "${script}"
+
+    run "${script}"
+    assert_failure
+    assert_output --partial "Nao foi possivel resolver a imagem do servico 'app' apos o build."
+}
+
 @test "cmd_build --help exibe uso sintetico e nao chama o Docker" {
     run cmd_build --help
     assert_success
@@ -471,4 +513,81 @@ teardown() {
     run cmd_build --flag-invalida
     assert_failure
     assert_output --partial "Uso: cctl build"
+}
+
+@test "retag (commands/build.sh:146) usa a imagem do proprio servico, nao a da dependencia (app depends_on db)" {
+    # Sobrescreve o mock do setup(): "app" depende de "db" no compose
+    # resolvido (mesma forma real que expos o bug em E2E) e as imagens dos
+    # dois servicos sao claramente distintas — se compose_service_image
+    # devolver a imagem errada, o "docker tag" abaixo pega a de "db".
+    mock_cmd docker '
+        log="'"${WORKDIR}"'/docker_calls.log"
+        echo "docker $*" >> "${log}"
+
+        if [[ "$1" == "compose" ]]; then
+            shift
+            args=("$@")
+            i=0
+            sub=""
+            while (( i < ${#args[@]} )); do
+                case "${args[$i]}" in
+                    -f) i=$((i + 2)) ;;
+                    -p) i=$((i + 2)) ;;
+                    *) sub="${args[$i]}"; i=$((i + 1)); break ;;
+                esac
+            done
+            rest=("${args[@]:$i}")
+
+            case "${sub}" in
+                config)
+                    if [[ "${rest[0]:-}" == "--services" ]]; then
+                        printf "app\ndb\n"
+                        exit 0
+                    else
+                        cat <<"YAML"
+services:
+  db:
+    image: src-db:built
+  app:
+    build:
+      context: .
+    depends_on:
+      db:
+        condition: service_started
+    image: src-app:built
+YAML
+                        exit 0
+                    fi
+                    ;;
+                build)
+                    exit 0
+                    ;;
+                *)
+                    exit 0
+                    ;;
+            esac
+        fi
+
+        case "$1" in
+            tag) exit 0 ;;
+            build)
+                echo "Successfully built abc123"
+                exit 0
+                ;;
+            login)
+                cat > "'"${WORKDIR}"'/login_stdin.txt"
+                exit 0
+                ;;
+            push) exit 0 ;;
+            logout) exit 0 ;;
+        esac
+        exit 0
+    '
+
+    run cmd_build app --tag v5
+    assert_success
+
+    run cat "${WORKDIR}/docker_calls.log"
+    assert_output --partial "docker tag src-app:built ghcr.io/testproj-app:v5"
+    refute_output --partial "docker tag src-db:built"
 }

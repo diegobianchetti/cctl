@@ -31,6 +31,36 @@ network_allocate_subnet() {
     return 1
 }
 
+# Lista os nomes das redes Docker do projeto (usado por show_details,
+# clear-all, down e a limpeza de rede orfa no install).
+#
+# UNIAO, nao fallback condicional: mesma razao de volumes_list_for_project
+# (lib/volumes.sh) — uma rede rotulada pelo compose e uma rede orfa/recriada
+# a mao sem label podem coexistir, e um `if [[ -z ]]` que so consulta o
+# ramo por nome quando o ramo por label vem vazio faz a orfa desaparecer
+# silenciosamente. Os dois ramos sempre rodam e o resultado e a uniao
+# (dedup com `sort -u`). O filtro "name=" de REDE aceita ancora "^" (ao
+# contrario do de volume), entao o ramo por nome ja usa prefixo literal via
+# o proprio filtro do Docker — sem regex interpolada no lado do cctl.
+network_list_for_project() {
+    local project_name="$1"
+    local by_label by_name
+
+    # Label exato do compose (nao sofre colisao de prefixo)
+    by_label=$(docker network ls \
+        --filter "label=com.docker.compose.project=${project_name}" \
+        --format "{{.Name}}")
+
+    # Filtro por nome ancorado no inicio (cobre redes orfas/sem label)
+    by_name=$(docker network ls --filter "name=^${project_name}_" --format "{{.Name}}")
+
+    # printf sempre com exit 0 (mesmo com string vazia) e sed remove as
+    # linhas em branco resultantes — evita depender de `[[ -n ]] && printf`,
+    # que sob `set -e` do chamador aborta o script quando ambos os ramos
+    # vem vazios.
+    printf '%s\n%s\n' "${by_label}" "${by_name}" | sed '/^$/d' | sort -u
+}
+
 # Exibe detalhes da rede Docker do projeto
 network_show_details() {
     local project_name="${COMPOSE_PROJECT_NAME}"
@@ -42,7 +72,7 @@ network_show_details() {
 
     # Busca redes do projeto
     local networks
-    networks=$(docker network ls --filter "name=${project_name}" --format "{{.Name}}")
+    networks=$(network_list_for_project "${project_name}")
 
     if [[ -z "${networks}" ]]; then
         log_warn "Nenhuma rede encontrada para o projeto ${project_name}"
@@ -94,4 +124,46 @@ network_disconnect_nginx() {
     else
         log_warn "Nginx nao estava conectado a rede ${project_network}"
     fi
+}
+
+# Desconecta o nginx-proxy de TODAS as redes do projeto, sem remove-las —
+# usado por `cctl down` ANTES do `docker compose down`: a rede so pode ser
+# removida quando nenhum endpoint externo ao projeto (o nginx-proxy, que
+# `network_connect_nginx` conecta durante o install) permanece conectado; o
+# proprio `docker compose down` remove a rede depois de derrubar os
+# containers do projeto, entao aqui so precisamos tirar o proxy do caminho
+# antes. Uso: network_disconnect_project_networks <project_name>
+network_disconnect_project_networks() {
+    local project_name="$1"
+    local networks
+    networks=$(network_list_for_project "${project_name}")
+    [[ -z "${networks}" ]] && return 0
+
+    local net
+    for net in ${networks}; do
+        network_disconnect_nginx "${net}"
+    done
+}
+
+# Desconecta o nginx-proxy e REMOVE as redes orfas do projeto — usado pelo
+# `cctl clear-all` (etapa de redes) e pelo inicio do `cctl install` para se
+# recuperar de uma instalacao/down anterior que falhou antes de desconectar
+# o proxy, deixando uma rede orfa com endpoints ativos que bloqueia o
+# `docker network rm` (e, por tabela, o `docker compose up` seguinte reusar
+# a rede do zero). Uso: network_cleanup_orphans <project_name>
+network_cleanup_orphans() {
+    local project_name="$1"
+    local networks
+    networks=$(network_list_for_project "${project_name}")
+    [[ -z "${networks}" ]] && return 0
+
+    local net
+    for net in ${networks}; do
+        network_disconnect_nginx "${net}"
+        if docker network rm "${net}" 2>/dev/null; then
+            log_success "Rede orfa ${net} removida"
+        else
+            log_warn "Rede ${net} nao pode ser removida agora (ainda em uso por outro container?)"
+        fi
+    done
 }
