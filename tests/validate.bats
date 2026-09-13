@@ -234,3 +234,51 @@ teardown() {
     run validate_service_name "app db"
     assert_failure
 }
+
+# --- validate_preflight_install / severidade do DNS por SSL_MODE ----------
+
+@test "validate_preflight_install: DNS nao resolve + SSL_MODE=self-signed -> passa (aviso, nao erro)" {
+    mock_cmd docker '
+        case "$1 $2" in
+            "info "*|"info") exit 0 ;;
+            "compose version") exit 0 ;;
+            *) exit 0 ;;
+        esac
+    '
+    mock_cmd host 'exit 1'
+    DOMAIN_NAME="exemplo-inexistente.com.br"
+    SSL_MODE="self-signed"
+    run validate_preflight_install
+    assert_success
+    assert_output --partial "AVISO"
+}
+
+@test "validate_preflight_install: DNS nao resolve + SSL_MODE=letsencrypt -> falha (erro fatal)" {
+    mock_cmd docker '
+        case "$1 $2" in
+            "info "*|"info") exit 0 ;;
+            "compose version") exit 0 ;;
+            *) exit 0 ;;
+        esac
+    '
+    mock_cmd host 'exit 1'
+    DOMAIN_NAME="exemplo-inexistente.com.br"
+    SSL_MODE="letsencrypt"
+    run validate_preflight_install
+    assert_failure
+}
+
+@test "validate_preflight_install: DNS nao resolve + SSL_MODE ausente (default letsencrypt) -> falha" {
+    mock_cmd docker '
+        case "$1 $2" in
+            "info "*|"info") exit 0 ;;
+            "compose version") exit 0 ;;
+            *) exit 0 ;;
+        esac
+    '
+    mock_cmd host 'exit 1'
+    DOMAIN_NAME="exemplo-inexistente.com.br"
+    unset SSL_MODE
+    run validate_preflight_install
+    assert_failure
+}

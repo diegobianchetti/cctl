@@ -1,0 +1,25 @@
+########################################################
+## Override opcional: publica moodle-db em loopback   ##
+##                                                     ##
+## O compose base NAO publica a porta do banco no host ##
+## (principio do projeto: so 80/443 do proxy sao       ##
+## bindados). Este override existe para quem precisa   ##
+## de acesso direto ao Postgres a partir do host (DBA, ##
+## pgAdmin) sem expor o banco na rede — publica so em   ##
+## 127.0.0.1, nunca em 0.0.0.0.                         ##
+##                                                     ##
+## Habilite adicionando este arquivo a COMPOSE_FILES   ##
+## em project.conf (ver comentario la).                ##
+########################################################
+services:
+  moodle-db:
+    ports:
+    # Sintaxe CURTA de proposito: na sintaxe longa, `published` e SOMENTE a
+    # porta — o endereco de bind vai no campo `host_ip`. Usar
+    # `published: 127.0.0.1:${MOODLE_DB_PORT}` passa pelo `config` (o schema
+    # aceita string) mas o daemon REJEITA na criacao do container com
+    # "invalid port specification". Medido na VM em 2026-09-13:
+    #   published: 127.0.0.1:15999          -> Error: invalid port specification
+    #   host_ip: 127.0.0.1 + published: "15998" -> sobe
+    #   "127.0.0.1:15997:5432"              -> sobe e publica so em loopback
+    - "127.0.0.1:${MOODLE_DB_PORT}:5432"

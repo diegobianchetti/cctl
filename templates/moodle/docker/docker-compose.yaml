@@ -22,9 +22,10 @@ services:
               cpus: ${MOODLE_DB_CPU_LIMIT}
     networks:
       - moodle-network
-    ports:
-    - published: ${MOODLE_DB_PORT}
-      target: 5432
+    # Sem "ports:" aqui de proposito: o banco nao e bindado no host por
+    # padrao (so 80/443 do proxy). Para expor em loopback (DBA/pgAdmin),
+    # habilite o override docker-compose.db-port.yaml via COMPOSE_FILES
+    # em project.conf.
     volumes:
       - dbdata:/var/lib/postgresql/data
       - backup_db:/var/backups/

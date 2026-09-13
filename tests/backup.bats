@@ -7,7 +7,7 @@ setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh volumes.sh backup.sh
+    source_lib colors.sh log.sh volumes.sh compose.sh backup.sh
 
     WORKDIR="$(make_tmp_workdir)"
     cd "${WORKDIR}" || return 1
@@ -102,6 +102,126 @@ teardown() {
     [[ "${moodle_count}" -eq 1 ]]
     # "moodle-lab" permanece intocado (2 arquivos, nenhum removido/contado)
     [[ "${moodle_lab_count}" -eq 2 ]]
+}
+
+# --- _backup_database (P: nome de container montado a mao / usuario chumbado / dump vazio) --
+
+@test "_backup_database: resolve o servico via compose_exec, nao via nome de container montado a mao" {
+    export DB_SERVICE="moodle-db"
+    export DB_TYPE="postgresql"
+    export DB_USER="moodle"
+
+    mock_cmd docker '
+        echo "docker $*" >> "'"${WORKDIR}"'/docker_calls.log"
+        case "$1" in
+            exec)
+                # Padrao antigo: "docker exec <container-montado-a-mao> ...".
+                # Tem que falhar — prova que o codigo novo nao usa esse caminho.
+                exit 1
+                ;;
+            compose)
+                shift
+                found_exec=0
+                found_service=0
+                for a in "$@"; do
+                    [[ "${a}" == "exec" ]] && found_exec=1
+                    [[ "${a}" == "moodle-db" ]] && found_service=1
+                done
+                if [[ ${found_exec} -eq 1 && ${found_service} -eq 1 ]]; then
+                    echo "-- fake pg_dumpall output --"
+                    exit 0
+                fi
+                exit 1
+                ;;
+            *) exit 0 ;;
+        esac
+    '
+
+    run _backup_database "${BACKUP_DIR}" "moodle-20260913-000000"
+    assert_success
+    [[ -f "${BACKUP_DIR}/moodle-20260913-000000-db.sql.gz" ]]
+
+    run cat "${WORKDIR}/docker_calls.log"
+    refute_output --partial "docker exec "
+    assert_output --partial "docker compose"
+}
+
+@test "_backup_database: dump vazio (stdout vazio do pg_dumpall) -- remove o arquivo e retorna erro" {
+    export DB_SERVICE="moodle-db"
+    export DB_TYPE="postgresql"
+
+    mock_cmd docker '
+        case "$1" in
+            compose)
+                shift
+                found=0
+                for a in "$@"; do [[ "${a}" == "exec" ]] && found=1; done
+                # "sucesso" do exec, mas SEM nenhuma saida em stdout — o caso
+                # real medido: gzip de conteudo vazio, 20 bytes, gzip -t passa.
+                [[ ${found} -eq 1 ]] && exit 0
+                exit 1
+                ;;
+            *) exit 0 ;;
+        esac
+    '
+
+    run _backup_database "${BACKUP_DIR}" "moodle-empty"
+    assert_failure
+    [[ ! -f "${BACKUP_DIR}/moodle-empty-db.sql.gz" ]]
+}
+
+# --- _backup_rotate por CONJUNTO (nao por arquivo) -------------------------
+
+@test "_backup_rotate: com 2 conjuntos de 3 arquivos e retencao=1, mantem o CONJUNTO inteiro mais recente" {
+    local dir="${BACKUP_DIR}"
+    local suf
+    for suf in db vol-a vol-b; do
+        : > "${dir}/moodle-20260910-000000-${suf}.tar.gz"
+    done
+    for suf in db vol-a vol-b; do
+        : > "${dir}/moodle-20260912-000000-${suf}.tar.gz"
+    done
+
+    export BACKUP_RETENTION=1
+    run _backup_rotate "${dir}"
+    assert_success
+
+    local remaining
+    remaining=$(find "${dir}" -maxdepth 1 -name 'moodle-2*' -type f | wc -l)
+    [[ "${remaining}" -eq 3 ]]
+    [[ -f "${dir}/moodle-20260912-000000-db.tar.gz" ]]
+    [[ -f "${dir}/moodle-20260912-000000-vol-a.tar.gz" ]]
+    [[ -f "${dir}/moodle-20260912-000000-vol-b.tar.gz" ]]
+    [[ ! -f "${dir}/moodle-20260910-000000-db.tar.gz" ]]
+}
+
+# --- backup_run: delega para ./scripts/backup.sh quando existe -------------
+
+@test "backup_run: usa ./scripts/backup.sh quando existe e nao chama o backup generico" {
+    mkdir -p ./scripts
+    cat > ./scripts/backup.sh <<'SCRIPTEOF'
+#!/bin/bash
+echo "script proprio executado"
+exit 0
+SCRIPTEOF
+    chmod +x ./scripts/backup.sh
+
+    # Se o generico rodasse, chamaria "docker" (via _backup_volumes/database)
+    # sem nenhum mock configurado aqui — sinalizador de que o generico NAO
+    # deveria ser alcancado neste teste.
+    run backup_run
+    assert_success
+    assert_output --partial "script proprio executado"
+}
+
+# --- template moodle: scripts/backup.sh existe e e executavel --------------
+
+@test "templates/moodle/scripts/backup.sh existe, tem shebang bash e e executavel" {
+    local script="${CCTL_ROOT}/templates/moodle/scripts/backup.sh"
+    [[ -f "${script}" ]]
+    [[ -x "${script}" ]]
+    run head -n1 "${script}"
+    assert_output "#!/bin/bash"
 }
 
 @test "_backup_volumes: com label exato do compose, so processa volumes do projeto certo" {
