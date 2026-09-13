@@ -1,7 +1,7 @@
 #!/bin/bash
 # commands/install.sh — Instala a instancia no servidor
 #
-# Pré-requisito: estar no diretorio da branch de cliente (com project.conf, sem .cctl-instance)
+# Pré-requisito: estar no diretorio do projeto (com project.conf, sem .cctl-instance)
 #
 # Fluxo:
 #   1. Valida contexto (project.conf existe, .cctl-instance NAO existe)
