@@ -43,6 +43,69 @@ volumes_list_for_project() {
     printf '%s\n%s\n' "${by_label}" "${by_name}" | sed '/^$/d' | sort -u
 }
 
+# Lista os bind mounts (host paths) do compose do projeto atual — bash puro,
+# sem jq. Antes deste parsing, `volumes_list` consultava
+# `compose_exec config --format json` e filtrava com `jq -r 'select(.type ==
+# "bind")'`, opcional (com fallback "(jq nao disponivel...)") — o unico uso
+# de jq em todo o projeto, o que impedia o claim de "bash puro" ser literal
+# (ver docs/README "Por que Bash puro, sem yq, jq ou Python?").
+#
+# Alternativa avaliada e descartada: `docker inspect` dos containers em
+# execucao (`.Mounts[] | select(.Type=="bind")`) tambem exigiria jq (ou um
+# parser Go-template mais fragil que a heuristica abaixo) e so cobre
+# containers *up* no momento — `cctl volumes` deve funcionar tambem com o
+# ambiente parado, contra o compose resolvido.
+#
+# Escolha: mesma heuristica de parsing por indentacao que
+# `compose_buildable_services`/`compose_service_image` (lib/compose.sh) ja
+# usam sobre `docker compose config` (YAML resolvido, sem --format json).
+# Formato real de um bind mount no YAML resolvido (docker compose v2):
+#   services:
+#     <servico>:            # 2 espacos
+#       volumes:             # 4 espacos
+#         - type: bind        # 6 espacos, inicio do item da lista
+#           source: /host/..  # 8 espacos
+#           target: /dst/..   # 8 espacos
+#           bind: {}
+# Dentro do bloco "volumes:" de um servico, cada item comeca em "type:" (6
+# espacos); quando o tipo e "bind", acumula "source:"/"target:" (8 espacos)
+# e imprime ao encontrar o proximo item, o fim do bloco de volumes (linha
+# com menos de 6 espacos de indentacao) ou o fim do arquivo. Mesma limitacao
+# conhecida das duas funcoes irmas: assume a indentacao padrao de 2 espacos
+# por nivel do `docker compose config` atual.
+_volumes_bind_mounts() {
+    local config
+    config=$(compose_exec config 2>/dev/null) || return 1
+
+    echo "${config}" | awk '
+        /^services:[[:space:]]*$/ { in_services = 1; next }
+        in_services && /^[A-Za-z0-9_-]+:[[:space:]]*$/ { in_services = 0 }
+        in_services && /^  [A-Za-z0-9._-]+:[[:space:]]*$/ { in_volumes = 0; next }
+        in_services && /^    volumes:[[:space:]]*$/ { in_volumes = 1; next }
+        in_services && in_volumes && /^      - type:[[:space:]]*/ {
+            if (is_bind && source != "") print "  " source "  ->  " target
+            t = $0
+            sub(/^      - type:[[:space:]]*/, "", t)
+            is_bind = (t == "bind")
+            source = ""; target = ""
+            next
+        }
+        in_services && in_volumes && is_bind && /^        source:[[:space:]]*/ {
+            s = $0; sub(/^        source:[[:space:]]*/, "", s); gsub(/^"|"$/, "", s)
+            source = s; next
+        }
+        in_services && in_volumes && is_bind && /^        target:[[:space:]]*/ {
+            s = $0; sub(/^        target:[[:space:]]*/, "", s); gsub(/^"|"$/, "", s)
+            target = s; next
+        }
+        in_services && in_volumes && !/^      / {
+            if (is_bind && source != "") print "  " source "  ->  " target
+            in_volumes = 0; is_bind = 0; source = ""; target = ""
+        }
+        END { if (is_bind && source != "") print "  " source "  ->  " target }
+    '
+}
+
 # Lista volumes Docker e bind mounts do projeto
 volumes_list() {
     local project_name="${COMPOSE_PROJECT_NAME}"
@@ -66,12 +129,15 @@ volumes_list() {
 
     # 2. Bind mounts do compose
     echo -e "\n${YELLOW}=== Bind Mounts (Host Paths) ===${RESET}"
-    if command -v jq &>/dev/null; then
-        compose_exec config --format json 2>/dev/null \
-            | jq -r '.services[]?.volumes[]? | select(.type == "bind") | "  \(.source)  →  \(.target)"' 2>/dev/null \
-            || echo "  Nao foi possivel listar bind mounts"
+    local binds
+    if binds=$(_volumes_bind_mounts); then
+        if [[ -n "${binds}" ]]; then
+            echo "${binds}"
+        else
+            echo "  Nenhum bind mount encontrado"
+        fi
     else
-        echo "  (jq nao disponivel para listar bind mounts)"
+        echo "  Nao foi possivel listar bind mounts"
     fi
 }
 
