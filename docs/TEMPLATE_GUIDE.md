@@ -118,6 +118,24 @@ HOOK_POST_INSTALL="post-install.sh"
 | `BACKUP_DIR` | path | não | Diretório dos backups. Default: `./backups` |
 | `BACKUP_RETENTION` | int | não | Dias de retenção dos backups. Default: `3` |
 | `HOOK_POST_INSTALL` | string | não | Nome do script em `scripts/` executado pós-install. |
+| `ROLLOUT_SERVICE` | string | não | Serviço alvo padrão de `cctl rollout bluegreen/rolling` (sobrescrito por `--service`). |
+
+### `ROLLOUT_SERVICE` e a convenção de healthcheck
+
+`ROLLOUT_SERVICE` é uma **string simples** (não array, diferente de
+`CONNECTABLE_SERVICES`) — o rollout troca o tráfego de um serviço por vez.
+Templates com um único serviço "de aplicação" (ex.: `moodle`) declaram esse
+serviço diretamente. Templates com mais de um `set $target` no vhost (ex.:
+`dspace`, que tem backend e frontend) devem declarar explicitamente qual dos
+dois é o alvo padrão — o outro serviço continua acessível via `--service`.
+
+O `cctl rollout` deriva porta e esquema (`http`/`https`) diretamente do vhost
+renderizado (`set $target <alias>:<porta>;` + `proxy_pass <scheme>://$target;`),
+então nenhuma variável adicional de porta é necessária no `project.conf`. Para
+o healthcheck em modo `docker` funcionar automaticamente (`--health-mode auto`
+detecta e usa esse modo), o serviço em `docker-compose.yaml` precisa declarar
+`healthcheck:` — sem isso, o modo `auto` cai para sondas HTTP dentro da rede
+do projeto (ver `docs/USAGE.md#rollout-bluegreen`).
 
 ## Arquivo obrigatório: `docker/.env.template`
 

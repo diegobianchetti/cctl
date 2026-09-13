@@ -117,6 +117,7 @@ core_bootstrap() {
     source "${lib_dir}/passwords.sh"
     source "${lib_dir}/database.sh"
     source "${lib_dir}/nginx.sh"
+    source "${lib_dir}/rollout.sh"
     source "${lib_dir}/ssl.sh"
     source "${lib_dir}/cron.sh"
     source "${lib_dir}/backup.sh"
