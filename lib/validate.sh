@@ -219,8 +219,11 @@ validate_preflight_install() {
     if [[ -n "${DOMAIN_NAME:-}" ]]; then
         if validate_dns "${DOMAIN_NAME}"; then
             msg_success "DNS (${DOMAIN_NAME})"
-        else
+        elif [[ "${SSL_MODE:-letsencrypt}" == "letsencrypt" ]]; then
+            log_error "DNS de '${DOMAIN_NAME}' nao resolve — obrigatorio para SSL_MODE=letsencrypt (desafio ACME)."
             ((errors++))
+        else
+            msg_warn "DNS de '${DOMAIN_NAME}' nao resolve — seguindo (SSL_MODE=${SSL_MODE:-letsencrypt} nao depende de DNS publico). O certificado/vhost so funcionara quando o nome resolver."
         fi
     fi
 
