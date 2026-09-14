@@ -10,7 +10,7 @@ setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh core.sh network.sh volumes.sh compose.sh nginx.sh cron.sh
+    source_lib colors.sh log.sh core.sh network.sh volumes.sh compose.sh nginx.sh vhost.sh cron.sh
 
     WORKDIR="$(make_tmp_workdir)"
     cd "${WORKDIR}" || return 1

@@ -5,7 +5,7 @@ setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh core.sh nginx.sh
+    source_lib colors.sh log.sh core.sh nginx.sh vhost.sh
 
     WORKDIR="$(make_tmp_workdir)"
     cd "${WORKDIR}" || return 1
@@ -197,4 +197,52 @@ teardown() {
     assert_success
     # backup e limpo ao final (sucesso), e nao deve sobrar em caminho previsivel
     [[ ! -d "/tmp/nginx_backup_app" ]]
+}
+
+# --- regressao R1 (F2.2): nginx_enable_site restaura, nao apaga ------------
+#
+# Ate a F2.2, nginx_enable_site (lib/nginx.sh) apagava o vhost (`rm -f`) se
+# o `nginx -t` falhasse apos aplicar a config nova — diferente dos outros
+# dois donos (nginx_disable_site, _rollout_switch_vhost), que sempre
+# restauravam do backup. Espelha "nginx_disable_site: config invalida apos
+# remocao aciona restauracao do backup" (acima), mas para o caminho do
+# enable, com um vhost JA instalado (cenario de reinstall/update). Este
+# teste tem de FALHAR se a linha `rm -f` do vhost voltar.
+@test "nginx_enable_site (regressao R1): config invalida apos aplicar RESTAURA o vhost original, nao apaga" {
+    mkdir -p nginx vhosts
+    export NGINX_VHOSTS_DIR="${WORKDIR}/vhosts"
+    export COMPOSE_PROJECT_NAME="app"
+    # vhost ja instalado ANTES desta chamada (cenario de update)
+    echo "server { original }" > "${NGINX_VHOSTS_DIR}/app.conf"
+    echo "server { novo }" > nginx/site.conf
+
+    # nginx -t sempre falha => forca o caminho de restauracao do backup
+    mock_cmd docker 'for a in "$@"; do [[ "$a" == "-t" ]] && exit 1; done; exit 0'
+
+    run nginx_enable_site "app.example.com" "./nginx/site.conf"
+    assert_failure
+    assert_output --partial "Restaurando"
+
+    # o vhost tem de existir com o conteudo ORIGINAL restaurado — nunca
+    # apagado, nunca com o conteudo novo aplicado pela metade.
+    [[ -f "${NGINX_VHOSTS_DIR}/app.conf" ]]
+    grep -q "original" "${NGINX_VHOSTS_DIR}/app.conf"
+    run grep -q "novo" "${NGINX_VHOSTS_DIR}/app.conf"
+    assert_failure
+}
+
+@test "nginx_enable_site (garantia do modulo): primeira instalacao com nginx -t falho nao deixa vhost parcial para tras" {
+    mkdir -p nginx vhosts
+    export NGINX_VHOSTS_DIR="${WORKDIR}/vhosts"
+    export COMPOSE_PROJECT_NAME="app"
+    # sem vhost previo (primeira instalacao) — nao ha nada para restaurar
+    echo "server { novo }" > nginx/site.conf
+
+    mock_cmd docker 'for a in "$@"; do [[ "$a" == "-t" ]] && exit 1; done; exit 0'
+
+    run nginx_enable_site "app.example.com" "./nginx/site.conf"
+    assert_failure
+
+    # restaurar o estado original (sem vhost previo) significa: sem vhost
+    [[ ! -f "${NGINX_VHOSTS_DIR}/app.conf" ]]
 }

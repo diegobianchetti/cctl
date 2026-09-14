@@ -349,73 +349,16 @@ _rollout_vhost_target() {
 # (preserva porta/indentacao), testa e recarrega o nginx. Em falha do teste,
 # restaura o backup e recarrega de novo. Uso: _rollout_switch_vhost <vhost>
 # <alias-antigo> <alias-novo>
+#
+# Wrapper fino sobre vhost_switch_target (lib/vhost.sh, F2.2) — a
+# transformacao (sed nas linhas "set $target") e especifica do rollout e
+# continua aqui dentro do modulo; a garantia (backup -> aplicar -> nginx -t
+# -> reverter em falha) e agora compartilhada com nginx_enable_site/
+# nginx_disable_site via _vhost_apply.
 _rollout_switch_vhost() {
     local vhost="$1" old_alias="$2" new_alias="$3"
 
-    local backup_dir
-    backup_dir="$(mktemp -d "${TMPDIR:-/tmp}/cctl_rollout_backup.XXXXXX")" || {
-        log_error "Falha ao criar diretorio de backup temporario"
-        return 1
-    }
-
-    # Backup so precisa do CONTEUDO (nao de -p): o vhost final so e tocado por
-    # `cp` (sem -p) escrevendo por cima de um arquivo ja existente, entao
-    # dono/modo do vhost em producao (root:root 644) nunca dependem do que o
-    # backup preservou. Medido na VM alvo (Ubuntu 24.04): `cp -p` de um
-    # arquivo root:root 644 para um diretorio do proprio usuario tambem
-    # funciona (rc=0) — a troca para "sem -p" e defesa preventiva de baixo
-    # custo, nao correcao de um bug real observado.
-    if ! core_priv_run cp "${vhost}" "${backup_dir}/"; then
-        log_error "Falha ao criar backup do vhost ${vhost}"
-        rm -rf "${backup_dir}"
-        return 1
-    fi
-
-    local content tmpfile
-    content="$(core_priv_run cat "${vhost}")" || {
-        log_error "Falha ao ler o vhost ${vhost}"
-        rm -rf "${backup_dir}"
-        return 1
-    }
-
-    tmpfile="$(mktemp)" || {
-        log_error "Falha ao criar arquivo temporario"
-        rm -rf "${backup_dir}"
-        return 1
-    }
-
-    printf '%s\n' "${content}" | sed -E "s/^([[:space:]]*set [\$]target[[:space:]]+)${old_alias}:/\1${new_alias}:/" > "${tmpfile}"
-
-    if ! core_priv_run cp "${tmpfile}" "${vhost}"; then
-        # `cp` trunca o destino antes de escrever: uma falha aqui (ENOSPC,
-        # EIO, ticket do `sudo -n` perdido, sinal) pode deixar o vhost vivo
-        # meio-escrito ou vazio. Restaurar do backup ANTES de descarta-lo —
-        # nunca apagar o unico backup sem antes tentar recuperar o vhost.
-        log_error "Falha ao aplicar a nova configuracao no vhost ${vhost} — restaurando backup..."
-        rm -f "${tmpfile}"
-        if ! core_priv_run cp "${backup_dir}/$(basename "${vhost}")" "${vhost}"; then
-            log_error "Falha ao restaurar vhost de backup para ${vhost} — vhost pode estar em estado inconsistente. Backup preservado em: ${backup_dir}"
-            return 1
-        fi
-        log_warn "Vhost restaurado a partir do backup apos falha ao aplicar a nova configuracao."
-        rm -rf "${backup_dir}"
-        return 1
-    fi
-    rm -f "${tmpfile}"
-
-    if nginx_test_and_reload; then
-        rm -rf "${backup_dir}"
-        return 0
-    fi
-
-    log_error "Configuracao nginx invalida apos o switch! Restaurando vhost anterior..."
-    if ! core_priv_run cp "${backup_dir}/$(basename "${vhost}")" "${vhost}"; then
-        log_error "Falha ao restaurar vhost de backup para ${vhost} — vhost pode estar em estado inconsistente. Backup preservado em: ${backup_dir}"
-        return 1
-    fi
-    nginx_test_and_reload || true
-    rm -rf "${backup_dir}"
-    return 1
+    vhost_switch_target "${vhost}" "${old_alias}" "${new_alias}"
 }
 
 # Percorre COMPOSE_FILES e devolve (via stdout) o arquivo que DEFINE o
