@@ -190,6 +190,14 @@ Vhost renderizado durante `cctl install` se `HOST_NGINX=true` e
 `HOST_SSL=true`. Use `{{DOMAIN_NAME}}` e `{{COMPOSE_PROJECT_NAME}}` como
 placeholders — ambos são substituídos a partir do `.env`.
 
+Os caminhos `/etc/letsencrypt/...` abaixo são internos ao container
+`nginx-proxy` (contrato de mount de `LETSENCRYPT_DIR:/etc/letsencrypt:rw`,
+fixo — ver `cctl paths`) — não seguem `CCTL_BASE_DIR` nem mudam com ele. É o
+único ponto de certificado: o certbot escreve em `live/<dominio>/...`; os
+modos `manual`/`self-signed` escrevem direto em `<dominio>/...` (sem o
+segmento `live`) — ver `ssl_get_cert_path`/`ssl_get_key_path` em
+`lib/ssl.sh`.
+
 ```nginx
 server {
     listen 80;

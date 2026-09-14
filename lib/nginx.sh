@@ -1,18 +1,9 @@
 #!/bin/bash
 # lib/nginx.sh — Gerenciamento de configuracao Nginx no host (nginx-proxy)
-
-# Container nginx-proxy e diretorio de vhosts no host
-NGINX_CONTAINER_NAME="${NGINX_CONTAINER_NAME:-nginx-proxy}"
-NGINX_VHOSTS_DIR="${NGINX_VHOSTS_DIR:-/etc/nginx-proxy/vhosts.d}"
-
-# Infraestrutura do proxy nativo (cctl proxy up/down/...)
-PROXY_NETWORK="${PROXY_NETWORK:-cctl-proxy-net}"
-NGINX_PROXY_IMAGE="${NGINX_PROXY_IMAGE:-ghcr.io/diegobianchetti/nginx-proxy:latest}"
-PROXY_HTTP_PORT="${PROXY_HTTP_PORT:-80}"
-PROXY_HTTPS_PORT="${PROXY_HTTPS_PORT:-443}"
-SSL_CERTS_DIR="${SSL_CERTS_DIR:-/etc/nginx-proxy/certs}"
-CERTBOT_WEBROOT_DIR="${CERTBOT_WEBROOT_DIR:-/etc/nginx-proxy/certbot}"
-LETSENCRYPT_DIR="${LETSENCRYPT_DIR:-/etc/letsencrypt}"
+#
+# Caminhos (NGINX_VHOSTS_DIR, LETSENCRYPT_DIR, PROXY_*) NAO sao redeclarados
+# aqui — a fonte unica dos defaults e cctl.conf (sourceado em core_bootstrap
+# antes desta lib). Esta lib so consome as variaveis ja definidas.
 
 # Executa cp/rm com sudo somente quando necessario. Uso: _nginx_priv <cmd> [args...]
 #
@@ -118,6 +109,33 @@ nginx_remove_network_config() {
 
 # Sobe a infraestrutura do proxy (rede + diretorios + container). Idempotente:
 # avisa sem falhar se o container ja estiver rodando, inicia se estiver parado.
+#
+# Cria a arvore INTEIRA a partir de CCTL_BASE_DIR (inclusive instances/), via
+# core_priv_run mkdir -p — pode usar sudo se a raiz ainda nao existir/nao for
+# gravavel. Em seguida faz "chown" — chamado diretamente com sudo, nao via
+# core_priv_run (que nao suporta a operacao "chown") — apenas das FOLHAS
+# operacionais (CCTL_INSTANCE_BASE_DIR, NGINX_VHOSTS_DIR) para o usuario que
+# invocou (${SUDO_USER:-$(id -un)}).
+# LETSENCRYPT_DIR fica FORA do chown -R de proposito: e o certbot (root) quem
+# escreve la, inclusive as chaves privadas em archive/*/privkey.pem — se a
+# arvore fosse chownada recursivamente a partir de CCTL_BASE_DIR (que contem
+# letsencrypt/), essas chaves passariam a ser legiveis sem sudo por qualquer
+# processo rodando como o usuario do host. CCTL_BASE_DIR em si recebe chown
+# SEM "-R" (só o proprio diretorio, nao o conteudo) para nao arrastar
+# letsencrypt/ por baixo; cada folha abaixo dele recebe "-R" individualmente.
+# E de proposito: assim o dia a dia (install/up/backup/rollout) passa a
+# operar sem sudo nas folhas depois deste "proxy up" inicial, e o sudo fica
+# reservado para certbot e para os arquivos fixos de /etc (cron.d,
+# logrotate.d). Falha no chown e so aviso — nao aborta a subida do proxy, so
+# deixa o alvo sob dono root.
+# Indica se "$1" precisa de chown para o usuario operador (dono efetivo
+# atual difere do processo). Isolado em funcao (em vez de "[[ ! -O ]]" inline)
+# para permitir que os testes forcem o ramo "precisa chown" via override
+# pos-source — nao da para simular dono diferente de fato sem root real.
+_nginx_dir_needs_chown() {
+    [[ ! -O "$1" ]]
+}
+
 nginx_proxy_up() {
     if ! docker network inspect "${PROXY_NETWORK}" >/dev/null 2>&1; then
         msg_info "Criando rede ${PROXY_NETWORK}..."
@@ -129,10 +147,38 @@ nginx_proxy_up() {
         log_debug "Rede ${PROXY_NETWORK} ja existe"
     fi
 
-    core_priv_run mkdir -p "${NGINX_VHOSTS_DIR}" || { log_error "Falha ao criar ${NGINX_VHOSTS_DIR}"; return 1; }
-    core_priv_run mkdir -p "${SSL_CERTS_DIR}" || { log_error "Falha ao criar ${SSL_CERTS_DIR}"; return 1; }
-    core_priv_run mkdir -p "${CERTBOT_WEBROOT_DIR}" || { log_error "Falha ao criar ${CERTBOT_WEBROOT_DIR}"; return 1; }
-    core_priv_run mkdir -p "${LETSENCRYPT_DIR}" || { log_error "Falha ao criar ${LETSENCRYPT_DIR}"; return 1; }
+    local -a _proxy_dirs=(
+        "${CCTL_BASE_DIR}"
+        "${CCTL_INSTANCE_BASE_DIR}"
+        "${NGINX_VHOSTS_DIR}"
+        "${LETSENCRYPT_DIR}"
+    )
+    local _proxy_dir
+    for _proxy_dir in "${_proxy_dirs[@]}"; do
+        core_priv_run mkdir -p "${_proxy_dir}" || { log_error "Falha ao criar ${_proxy_dir}"; return 1; }
+    done
+
+    local _proxy_owner="${SUDO_USER:-$(id -un)}"
+    if _nginx_dir_needs_chown "${CCTL_BASE_DIR}"; then
+        local _proxy_chown_err
+        if ! _proxy_chown_err="$(sudo chown "${_proxy_owner}:${_proxy_owner}" "${CCTL_BASE_DIR}" 2>&1)"; then
+            log_warn "Falha ao ajustar dono de ${CCTL_BASE_DIR} para ${_proxy_owner} (siga usando sudo para operacoes nesta arvore): ${_proxy_chown_err}"
+        fi
+    fi
+
+    # Folhas operacionais apenas — LETSENCRYPT_DIR fica de fora (root-owned,
+    # ver comentario acima do container/proximo de nginx_proxy_up).
+    local -a _proxy_owned_dirs=(
+        "${CCTL_INSTANCE_BASE_DIR}"
+        "${NGINX_VHOSTS_DIR}"
+    )
+    local _proxy_owned_dir _proxy_chown_leaf_err
+    for _proxy_owned_dir in "${_proxy_owned_dirs[@]}"; do
+        _nginx_dir_needs_chown "${_proxy_owned_dir}" || continue
+        if ! _proxy_chown_leaf_err="$(sudo chown -R "${_proxy_owner}:${_proxy_owner}" "${_proxy_owned_dir}" 2>&1)"; then
+            log_warn "Falha ao ajustar dono de ${_proxy_owned_dir} para ${_proxy_owner} (siga usando sudo para operacoes nesta arvore): ${_proxy_chown_leaf_err}"
+        fi
+    done
 
     if [[ ! "${PROXY_HTTP_PORT}" =~ ^[0-9]+$ ]]; then
         log_error "PROXY_HTTP_PORT invalido: '${PROXY_HTTP_PORT}' (esperado inteiro)"
@@ -170,9 +216,7 @@ nginx_proxy_up() {
         -p "${PROXY_HTTP_PORT}:80" \
         -p "${PROXY_HTTPS_PORT}:443" \
         -v "${NGINX_VHOSTS_DIR}:/etc/nginx/conf.d/vhosts:ro" \
-        -v "${SSL_CERTS_DIR}:/etc/nginx/certs:ro" \
-        -v "${CERTBOT_WEBROOT_DIR}:/var/www/certbot:ro" \
-        -v "${LETSENCRYPT_DIR}:/etc/letsencrypt:ro" \
+        -v "${LETSENCRYPT_DIR}:/etc/letsencrypt:rw" \
         "${NGINX_PROXY_IMAGE}" >/dev/null; then
         msg_success "Proxy ${NGINX_CONTAINER_NAME} em execucao (rede ${PROXY_NETWORK})"
         return 0

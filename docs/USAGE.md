@@ -23,8 +23,26 @@ Unifica o gerenciamento de projetos DSpace e Moodle.
 - Docker >= 24.0 com Docker Compose v2
 - Bash >= 4.4
 - Git
-- Acesso sudo no servidor (para nginx, cron, SSL)
+- **`sudo`** no servidor — requisito, não opcional: o `cctl` roda como usuário
+  normal, mas exige permissão de sudo. Usado para a raiz de dados
+  (`CCTL_BASE_DIR`, na primeira vez), para escrever em `LETSENCRYPT_DIR`
+  (fica root-owned de propósito — guarda chave privada) e para os arquivos
+  fixos de `/etc/cron.d`/`/etc/logrotate.d` — depois do `cctl proxy up`
+  inicial (que ajusta o dono da árvore para o usuário que o invocou), o dia a
+  dia (`install`, `up`, `backup`, `rollout`) não pede senha. **`certbot` não
+  é requisito do host** — a emissão/renovação roda dentro do container
+  `nginx-proxy` via `docker exec`.
 - Acesso ao registry configurado em `DOCKER_OWNER` para pull das imagens
+
+### Layout no host
+
+Tudo o que o `cctl` grava no host fica sob uma raiz única,
+**`CCTL_BASE_DIR`** (default `/opt/cctl`, sobrescrevível por variável de
+ambiente) — instâncias, vhosts, certificados e diretório do Let's Encrypt
+derivam dela. As duas exceções são `/etc/cron.d` e `/etc/logrotate.d`,
+fixos por contrato do cron/logrotate (leem de caminho fixo do sistema,
+root-owned). Rode `cctl paths` a qualquer momento para ver as raízes
+efetivas, se existem e se são graváveis.
 
 ---
 
@@ -36,9 +54,9 @@ O `cctl` detecta automaticamente onde esta sendo executado e libera apenas os co
 
 | Contexto | Deteccao | Comandos disponiveis |
 |----------|----------|---------------------|
-| **template** | Diretorio `templates/` presente (repositorio do cctl) | `init`, `proxy`, `help` |
-| **project** | `project.conf` presente, sem `.cctl-instance` | `install`, `ssl`, `proxy`, `help` |
-| **instance** | `.cctl-instance` presente | Todos os operacionais (up, down, logs, backup, ssl, proxy, rollout...) |
+| **template** | Diretorio `templates/` presente (repositorio do cctl) | `init`, `proxy`, `paths`, `help` |
+| **project** | `project.conf` presente, sem `.cctl-instance` | `install`, `ssl`, `proxy`, `paths`, `help` |
+| **instance** | `.cctl-instance` presente | Todos os operacionais (up, down, logs, backup, ssl, proxy, rollout, paths...) |
 
 ### Manifest (project.conf)
 
@@ -240,7 +258,7 @@ as instancias do host, na rede `PROXY_NETWORK` (default `cctl-proxy-net`).
 - **slot green**: um container paralelo, subido a partir de um override de compose gerado em runtime (`docker-compose.rollout.yaml`, sempre removido ao final — inclusive em erro), com `container_name: ${COMPOSE_PROJECT_NAME}-<svc>-green` e `hostname: <svc>-green` via `extends:` do compose base. O override e gerado no mesmo diretorio do arquivo de `COMPOSE_FILES` que efetivamente **define** o servico (nem sempre o primeiro — ex.: template `dspace`, onde `dspace-angular` esta no segundo arquivo), e o `extends.file` aponta para o basename desse arquivo (nunca um caminho com `/`) porque o `docker compose` resolve `extends.file` relativo ao diretorio do proprio override, nao ao CWD.
 - O slot **live** alterna a cada rollout bem-sucedido. O candidato e sempre o slot que nao esta live.
 - O vhost do nginx usa `resolver 127.0.0.11; set $target <alias>:<porta>; proxy_pass <scheme>://$target;` — o Blue/Green so precisa trocar o alias dessa linha e recarregar o nginx (`nginx -t` + `nginx -s reload`) para mudar o trafego, sem `upstream` estatico.
-- **O switch reescreve o vhost VIVO em `NGINX_VHOSTS_DIR` (`/etc/nginx-proxy/vhosts.d/<projeto>.conf`), nunca o `./nginx/site.conf` da instancia.** O `site.conf` continua sendo apenas o render base gerado pelo `cctl install` — depois do primeiro rollout ele nao reflete mais o slot ativo. `cctl rollout status` (ou a leitura direta do vhost vivo) e a fonte da verdade sobre para onde o trafego esta indo, nunca o `site.conf` da instancia.
+- **O switch reescreve o vhost VIVO em `NGINX_VHOSTS_DIR` (`${CCTL_BASE_DIR}/nginx-proxy/vhosts.d/<projeto>.conf`, default `/opt/cctl/nginx-proxy/vhosts.d/<projeto>.conf`), nunca o `./nginx/site.conf` da instancia.** O `site.conf` continua sendo apenas o render base gerado pelo `cctl install` — depois do primeiro rollout ele nao reflete mais o slot ativo. `cctl rollout status` (ou a leitura direta do vhost vivo) e a fonte da verdade sobre para onde o trafego esta indo, nunca o `site.conf` da instancia.
 - Estado do rollout (slot live, alvo, imagem, data) fica em `ROLLOUT_STATE_FILE` (default `.cctl-rollout`, na raiz da instancia) — sourceable, mas lido por parsing (nunca dado `source` diretamente pelo cctl). A porta gravada no estado (`LIVE_TARGET`) e sempre a porta do servico/vhost — `--health-port` fica restrito a porta usada pela sonda de saude, que pode divergir.
 
 #### Exemplo (dominio ficticio)
@@ -483,7 +501,8 @@ token e sem sessao, falha com erro claro antes de tentar qualquer login.
 Voce esta rodando um comando operacional fora do diretorio da instancia. Navegue ate o diretorio correto:
 
 ```bash
-cd /var/docker/<projeto>-<cliente>
+cd <diretorio-onde-o-cctl-init-foi-executado>/<projeto>-<cliente>
+# convencao: sob CCTL_INSTANCE_BASE_DIR (default /opt/cctl/instances) — ver 'cctl paths'
 ```
 
 ### "Instancia ja instalada"

@@ -66,6 +66,12 @@ teardown() {
     assert_failure
 }
 
+@test "core_check_command_context: paths permitido em contexto template" {
+    CCTL_CONTEXT="template"
+    run core_check_command_context "paths"
+    assert_success
+}
+
 @test "core_check_command_context: project so permite install e help" {
     CCTL_CONTEXT="project"
     run core_check_command_context "install"
@@ -74,12 +80,24 @@ teardown() {
     assert_failure
 }
 
+@test "core_check_command_context: paths permitido em contexto project" {
+    CCTL_CONTEXT="project"
+    run core_check_command_context "paths"
+    assert_success
+}
+
 @test "core_check_command_context: unknown so permite init e help" {
     CCTL_CONTEXT="unknown"
     run core_check_command_context "help"
     assert_success
     run core_check_command_context "backup"
     assert_failure
+}
+
+@test "core_check_command_context: paths permitido em contexto unknown" {
+    CCTL_CONTEXT="unknown"
+    run core_check_command_context "paths"
+    assert_success
 }
 
 # --- core_load_manifest ---------------------------------------------------

@@ -2,8 +2,9 @@
 # tests/ssl.bats — testes para lib/ssl.sh (matriz de SSL) e commands/ssl.sh
 #
 # Isolamento: nenhum comando externo real e chamado exceto openssl (usado de
-# proposito para gerar/validar pares de chave reais). docker, sudo, certbot
-# e host sao sempre mockados via bin/ temporario no PATH.
+# proposito para gerar/validar pares de chave reais). docker, sudo e host sao
+# sempre mockados via bin/ temporario no PATH — certbot roda dentro do
+# container (docker exec), entao o mock de docker e quem registra a chamada.
 
 setup() {
     load 'helpers/common'
@@ -16,9 +17,9 @@ setup() {
     WORKDIR="$(make_tmp_workdir)"
     cd "${WORKDIR}" || return 1
 
-    export SSL_CERTS_DIR="${WORKDIR}/certs"
+    export LETSENCRYPT_DIR="${WORKDIR}/letsencrypt"
     export LETSENCRYPT_LIVE_DIR="${WORKDIR}/letsencrypt/live"
-    export CERTBOT_WEBROOT_DIR="${WORKDIR}/certbot"
+    export NGINX_CONTAINER_NAME="nginx-proxy"
     export DOMAIN_NAME="app.example.com"
 
     # sudo mockado: registra que foi chamado e executa o comando de verdade
@@ -135,32 +136,32 @@ teardown() {
 # ssl_get_cert_path / ssl_get_key_path
 # ============================================================
 
-@test "ssl_get_cert_path: modo self-signed resolve para /etc/nginx/certs" {
+@test "ssl_get_cert_path: modo self-signed resolve para /etc/letsencrypt (sem 'live')" {
     export SSL_MODE="self-signed"
     run ssl_get_cert_path "app.example.com"
     assert_success
-    assert_output "/etc/nginx/certs/app.example.com/fullchain.pem"
+    assert_output "/etc/letsencrypt/app.example.com/fullchain.pem"
 }
 
-@test "ssl_get_key_path: modo self-signed resolve para /etc/nginx/certs" {
+@test "ssl_get_key_path: modo self-signed resolve para /etc/letsencrypt (sem 'live')" {
     export SSL_MODE="self-signed"
     run ssl_get_key_path "app.example.com"
     assert_success
-    assert_output "/etc/nginx/certs/app.example.com/privkey.pem"
+    assert_output "/etc/letsencrypt/app.example.com/privkey.pem"
 }
 
-@test "ssl_get_cert_path: modo manual resolve para /etc/nginx/certs" {
+@test "ssl_get_cert_path: modo manual resolve para /etc/letsencrypt (sem 'live')" {
     export SSL_MODE="manual"
     run ssl_get_cert_path "app.example.com"
     assert_success
-    assert_output "/etc/nginx/certs/app.example.com/fullchain.pem"
+    assert_output "/etc/letsencrypt/app.example.com/fullchain.pem"
 }
 
-@test "ssl_get_key_path: modo manual resolve para /etc/nginx/certs" {
+@test "ssl_get_key_path: modo manual resolve para /etc/letsencrypt (sem 'live')" {
     export SSL_MODE="manual"
     run ssl_get_key_path "app.example.com"
     assert_success
-    assert_output "/etc/nginx/certs/app.example.com/privkey.pem"
+    assert_output "/etc/letsencrypt/app.example.com/privkey.pem"
 }
 
 @test "ssl_get_cert_path: modo letsencrypt resolve para /etc/letsencrypt/live" {
@@ -207,7 +208,7 @@ teardown() {
     run ssl_issue "app.example.com"
     assert_success
 
-    local dest="${SSL_CERTS_DIR}/app.example.com"
+    local dest="${LETSENCRYPT_DIR}/app.example.com"
     [[ -f "${dest}/fullchain.pem" ]]
     [[ -f "${dest}/privkey.pem" ]]
 
@@ -230,13 +231,13 @@ teardown() {
 
     run ssl_issue "localhost"
     assert_success
-    [[ ! -d "${SSL_CERTS_DIR}" ]]
+    [[ ! -d "${LETSENCRYPT_DIR}" ]]
 }
 
 @test "ssl_renew: self-signed regenera o par de chaves" {
     export SSL_MODE="self-signed"
     ssl_issue "app.example.com"
-    local dest="${SSL_CERTS_DIR}/app.example.com"
+    local dest="${LETSENCRYPT_DIR}/app.example.com"
 
     run ssl_renew "app.example.com"
     assert_success
@@ -251,7 +252,7 @@ teardown() {
 @test "ssl_renew: self-signed gera de fato um novo par (fingerprint muda)" {
     export SSL_MODE="self-signed"
     ssl_issue "app.example.com"
-    local dest="${SSL_CERTS_DIR}/app.example.com"
+    local dest="${LETSENCRYPT_DIR}/app.example.com"
 
     local fingerprint_antes fingerprint_depois
     fingerprint_antes=$(openssl x509 -noout -fingerprint -sha256 -in "${dest}/fullchain.pem")
@@ -281,7 +282,7 @@ teardown() {
     run ssl_issue "app.example.com"
     assert_success
 
-    local dest="${SSL_CERTS_DIR}/app.example.com"
+    local dest="${LETSENCRYPT_DIR}/app.example.com"
     [[ -f "${dest}/fullchain.pem" ]]
     [[ -f "${dest}/privkey.pem" ]]
 }
@@ -298,12 +299,12 @@ teardown() {
     assert_output --partial "chave publica do certificado nao corresponde a chave privada"
 
     # nada foi instalado — abortou ANTES de tocar o destino
-    [[ ! -d "${SSL_CERTS_DIR}/app.example.com" ]]
+    [[ ! -d "${LETSENCRYPT_DIR}/app.example.com" ]]
 }
 
 @test "ssl_issue: manual nao corrompe certificado existente quando o novo par e invalido" {
     export SSL_MODE="manual"
-    local dest="${SSL_CERTS_DIR}/app.example.com"
+    local dest="${LETSENCRYPT_DIR}/app.example.com"
     mkdir -p "${dest}"
     echo "certificado-antigo-valido" > "${dest}/fullchain.pem"
     echo "chave-antiga-valida" > "${dest}/privkey.pem"
@@ -328,8 +329,8 @@ teardown() {
 
     run _ssl_issue_manual "app.example.com"
     assert_success
-    [[ -f "${SSL_CERTS_DIR}/app.example.com/fullchain.pem" ]]
-    [[ -f "${SSL_CERTS_DIR}/app.example.com/privkey.pem" ]]
+    [[ -f "${LETSENCRYPT_DIR}/app.example.com/fullchain.pem" ]]
+    [[ -f "${LETSENCRYPT_DIR}/app.example.com/privkey.pem" ]]
     [[ ! -f sudo.log ]]
 }
 
@@ -357,7 +358,7 @@ teardown() {
     run ssl_issue "app.example.com"
     assert_success
 
-    local dest="${SSL_CERTS_DIR}/app.example.com"
+    local dest="${LETSENCRYPT_DIR}/app.example.com"
     [[ -f "${dest}/fullchain.pem" ]]
     [[ -f "${dest}/privkey.pem" ]]
 }
@@ -416,48 +417,73 @@ teardown() {
 # ssl_issue: letsencrypt
 # ============================================================
 
-@test "ssl_issue: letsencrypt chama certbot e recarrega o nginx" {
-    export SSL_MODE="letsencrypt"
-    mock_cmd certbot '
-        echo "certbot $*" >> "'"${WORKDIR}"'/certbot.log"
+# Mock de docker parametrizavel: registra toda chamada em docker.log e,
+# quando for "docker inspect <container>" (usado por
+# _nginx_proxy_require_container), sucede ou falha conforme
+# DOCKER_CONTAINER_EXISTS ("1" = existe, default "1").
+_mock_docker_ssl() {
+    mock_cmd docker '
+        echo "$*" >> "'"${WORKDIR}"'/docker.log"
+        if [[ "$1" == "inspect" ]]; then
+            [[ "'"${DOCKER_CONTAINER_EXISTS:-1}"'" == "1" ]] && exit 0
+            exit 1
+        fi
         exit 0
     '
+}
+
+@test "ssl_issue: letsencrypt chama certbot via docker exec (nao mais no host) e recarrega o nginx" {
+    export SSL_MODE="letsencrypt"
+    _mock_docker_ssl
 
     run ssl_issue "app.example.com"
     assert_success
     assert_output --partial "Certificado SSL emitido"
-    grep -q "certonly --webroot" "${WORKDIR}/certbot.log"
+    grep -q -- "exec nginx-proxy certbot certonly --webroot -w /var/www/certbot -d app.example.com --non-interactive --agree-tos --email admin@app.example.com" "${WORKDIR}/docker.log"
+    # prova de aceite: nenhuma flag --config-dir/--work-dir/--logs-dir (defaults do container ja bastam)
+    run grep -q -- "config-dir" "${WORKDIR}/docker.log"
+    assert_failure
 }
 
-@test "ssl_issue: letsencrypt aborta quando o DNS nao resolve" {
+@test "ssl_issue: letsencrypt aborta quando o DNS nao resolve (sem chamar certbot)" {
     export SSL_MODE="letsencrypt"
     mock_cmd host 'exit 1'
-    mock_cmd certbot 'echo "nao deveria ser chamado" >> "'"${WORKDIR}"'/certbot.log"; exit 0'
+    _mock_docker_ssl
 
     run ssl_issue "app.example.com"
     assert_failure
-    [[ ! -f "${WORKDIR}/certbot.log" ]]
+    run grep -q "certbot" "${WORKDIR}/docker.log"
+    assert_failure
 }
 
-@test "ssl_issue: letsencrypt falha quando certbot nao esta instalado" {
+@test "ssl_issue: letsencrypt falha quando o container do proxy nao existe" {
     export SSL_MODE="letsencrypt"
-    export PATH="${MOCK_BIN}:/usr/bin:/bin"
+    DOCKER_CONTAINER_EXISTS=0 _mock_docker_ssl
 
     run ssl_issue "app.example.com"
     assert_failure
-    assert_output --partial "certbot nao encontrado"
+    assert_output --partial "nao existe"
+    assert_output --partial "cctl proxy up"
+    run grep -q "certbot" "${WORKDIR}/docker.log"
+    assert_failure
 }
 
-@test "ssl_renew: letsencrypt chama certbot renew" {
+@test "ssl_renew: letsencrypt chama certbot renew via docker exec" {
     export SSL_MODE="letsencrypt"
-    mock_cmd certbot '
-        echo "certbot $*" >> "'"${WORKDIR}"'/certbot.log"
-        exit 0
-    '
+    _mock_docker_ssl
 
     run ssl_renew "app.example.com"
     assert_success
-    grep -q "^certbot renew --quiet$" "${WORKDIR}/certbot.log"
+    grep -q -- "exec nginx-proxy certbot renew --quiet" "${WORKDIR}/docker.log"
+}
+
+@test "ssl_renew: letsencrypt falha quando o container do proxy nao existe" {
+    export SSL_MODE="letsencrypt"
+    DOCKER_CONTAINER_EXISTS=0 _mock_docker_ssl
+
+    run ssl_renew "app.example.com"
+    assert_failure
+    assert_output --partial "nao existe"
 }
 
 # ============================================================
@@ -470,7 +496,7 @@ teardown() {
     run ssl_issue "app.example.com"
     assert_success
     assert_output --partial "SSL_MODE=none"
-    [[ ! -d "${SSL_CERTS_DIR}" ]]
+    [[ ! -d "${LETSENCRYPT_DIR}" ]]
 }
 
 @test "ssl_renew: none e noop informativo" {
