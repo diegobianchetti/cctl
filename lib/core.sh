@@ -95,6 +95,17 @@ core_priv_run() {
     sudo "$@"
 }
 
+# core_sudo_usable — sonda se sudo esta disponivel de forma nao-interativa
+# (sudo -n true), sem executar nenhuma operacao real. Para chamadores que
+# precisam decidir ANTES de chamar core_priv_run se ha um caminho
+# privilegiado viavel — ex: lib/cron.sh, para decidir o fallback de crontab
+# de usuario sem arriscar um prompt de senha preso num terminal
+# interativo. Mantem o unico ponto de contato direto com o binario "sudo"
+# concentrado neste arquivo.
+core_sudo_usable() {
+    sudo -n true 2>/dev/null
+}
+
 # Carrega todas as libs
 core_bootstrap() {
     local lib_dir="${CCTL_ROOT}/lib"
