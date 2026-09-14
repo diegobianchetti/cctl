@@ -176,7 +176,7 @@ volumes_clear() {
     if [[ -n "${volumes}" ]]; then
         echo -e "${BLUE}Volumes encontrados (inclui volumes orfaos sem label do compose):${RESET}"
         echo "${volumes}" | sed 's/^/  - /'
-        echo "${volumes}" | xargs -r sudo docker volume rm
+        echo "${volumes}" | xargs -r docker volume rm
         msg_success "Volumes removidos"
     else
         msg_info "Nenhum volume encontrado"

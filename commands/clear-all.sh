@@ -37,7 +37,7 @@ cmd_clear-all() {
     if [[ -n "${volumes}" ]]; then
         echo -e "${BLUE}Volumes encontrados (inclui volumes orfaos sem label do compose):${RESET}"
         echo "${volumes}" | sed 's/^/  - /'
-        echo "${volumes}" | xargs -r sudo docker volume rm
+        echo "${volumes}" | xargs -r docker volume rm
         msg_success "Volumes removidos"
     else
         msg_info "Nenhum volume encontrado"
@@ -61,10 +61,10 @@ cmd_clear-all() {
     cron_remove
 
     # Logrotate
-    local logrotate_file="/etc/logrotate.d/rotate-apache-logs-${project_name}"
+    local logrotate_file="${LOGROTATE_DIR}/rotate-apache-logs-${project_name}"
     if [[ -f "${logrotate_file}" ]]; then
         echo -e "  Removendo: ${CYAN}${logrotate_file}${RESET}"
-        sudo rm -f "${logrotate_file}"
+        core_priv_run rm -f "${logrotate_file}"
     fi
 
     # Etapa 6/6: Config do site nginx
