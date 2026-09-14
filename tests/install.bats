@@ -234,7 +234,7 @@ EOF
     grep -q "^SSL_KEY_PATH=/etc/letsencrypt/live/app.example.com/privkey.pem$" .env
 }
 
-@test "_install_set_ssl_paths: modo manual/self-signed aponta para /etc/nginx/certs" {
+@test "_install_set_ssl_paths: modo manual/self-signed aponta para /etc/letsencrypt (sem 'live')" {
     touch .env
     export DOMAIN_NAME="app.example.com"
     export SSL_MODE=manual
@@ -242,8 +242,8 @@ EOF
     run _install_set_ssl_paths
     assert_success
 
-    grep -q "^SSL_CERT_PATH=/etc/nginx/certs/app.example.com/fullchain.pem$" .env
-    grep -q "^SSL_KEY_PATH=/etc/nginx/certs/app.example.com/privkey.pem$" .env
+    grep -q "^SSL_CERT_PATH=/etc/letsencrypt/app.example.com/fullchain.pem$" .env
+    grep -q "^SSL_KEY_PATH=/etc/letsencrypt/app.example.com/privkey.pem$" .env
 }
 
 @test "_install_set_ssl_paths: modo none seta paths vazios" {

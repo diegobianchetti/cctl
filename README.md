@@ -36,8 +36,21 @@ embutido no README).
 - Docker Engine 24+
 - Docker Compose (plugin V2)
 - Bash 5.x
+- **`sudo`** — requisito, não opcional: o `cctl` roda como usuário comum,
+  mas exige permissão de sudo (raiz de dados na primeira vez, escrita em
+  `LETSENCRYPT_DIR` — que fica root-owned de propósito — e arquivos fixos de
+  `/etc/cron.d`/`/etc/logrotate.d`). **`certbot` não precisa estar instalado
+  no host** — roda dentro do container `nginx-proxy` (`docker exec`).
 - [nginx-proxy](https://github.com/diegobianchetti/nginx-proxy) em execução
   (necessário para `cctl install`)
+
+### Onde o `cctl` grava dados
+
+Tudo fica sob uma raiz única, `CCTL_BASE_DIR` (default `/opt/cctl`,
+sobrescrevível por variável de ambiente) — instâncias, vhosts, certificados
+e Let's Encrypt derivam dela; `cctl paths` mostra as raízes efetivas e se
+são graváveis. `/etc/cron.d` e `/etc/logrotate.d` são as únicas exceções
+fixas (contrato de cron/logrotate, arquivos root-owned).
 
 ## Instalação
 
@@ -202,9 +215,12 @@ cctl proxy up
 
 Isso cria a rede Docker compartilhada (`PROXY_NETWORK`, default
 `cctl-proxy-net`), os diretórios de vhosts/certificados
-(`NGINX_VHOSTS_DIR`, `SSL_CERTS_DIR`, `CERTBOT_WEBROOT_DIR`,
-`LETSENCRYPT_DIR`) e sobe o container `nginx-proxy` a partir de
-`NGINX_PROXY_IMAGE` (default `ghcr.io/diegobianchetti/nginx-proxy:latest`).
+(`NGINX_VHOSTS_DIR`, `LETSENCRYPT_DIR` — único ponto de certificado, montado
+RW em `/etc/letsencrypt` no container) e sobe o container `nginx-proxy` a
+partir de `NGINX_PROXY_IMAGE` (default
+`ghcr.io/diegobianchetti/nginx-proxy:latest`). O webroot do certbot
+(`/var/www/certbot`) é interno ao container — não tem mount de host — e é uma
+dependência da imagem `nginx-proxy` (frente F3), que precisa criá-lo.
 
 Valide o catch-all antes de seguir — `curl http://localhost` deve fechar a conexão
 sem resposta (`return 444`), sinal de que o proxy está de pé e sem vhosts ainda.
@@ -338,6 +354,7 @@ completo em [docs/USAGE.md](docs/USAGE.md#rollout-bluegreen).
 | `config` | Exibe configuração resolvida |
 | `db-check-config` | Verifica config customizada do banco |
 | `db-update-config` | Aplica config customizada no banco |
+| `paths` | Mostra `CCTL_BASE_DIR` e as raízes efetivas (existe/gravável) — qualquer contexto |
 
 Credenciais de push: `CCTL_REGISTRY_USER` + `CCTL_REGISTRY_TOKEN` (ou
 `GHCR_TOKEN`/`DOCKER_TOKEN`), nunca como argumento de linha de comando.
