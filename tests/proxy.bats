@@ -8,7 +8,7 @@ setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh core.sh nginx.sh
+    source_lib colors.sh log.sh core.sh nginx.sh vhost.sh
     # shellcheck source=/dev/null
     source "${CCTL_ROOT}/commands/proxy.sh"
 

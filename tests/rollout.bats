@@ -10,7 +10,7 @@ setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh validate.sh core.sh network.sh compose.sh nginx.sh rollout.sh
+    source_lib colors.sh log.sh validate.sh core.sh network.sh compose.sh nginx.sh vhost.sh rollout.sh
 
     local real_cctl_root
     real_cctl_root="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
@@ -317,6 +317,7 @@ _run_strict() {
         echo 'source "${CCTL_ROOT}/lib/network.sh"'
         echo 'source "${CCTL_ROOT}/lib/compose.sh"'
         echo 'source "${CCTL_ROOT}/lib/nginx.sh"'
+        echo 'source "${CCTL_ROOT}/lib/vhost.sh"'
         echo 'source "${CCTL_ROOT}/lib/rollout.sh"'
         echo 'source "${CCTL_ROOT}/commands/rollout.sh"'
         printf 'COMPOSE_FILES=(%q)\n' "${COMPOSE_FILES[0]}"
