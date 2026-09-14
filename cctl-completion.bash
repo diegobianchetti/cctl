@@ -20,7 +20,7 @@ _cctl_completions() {
     local all_commands="init install up down start stop restart ps logs status
                         network volumes config connect build update backup list
                         db-check-config db-update-config clear-volumes clear-all
-                        destroy proxy ssl rollout help"
+                        destroy proxy ssl rollout paths help"
 
     # Opcoes globais
     local global_opts="--version --help --verbose -v -h"

@@ -3,20 +3,27 @@
 #
 # Modos suportados (SSL_MODE no project.conf):
 #   self-signed — par autoassinado gerado na hora via OpenSSL (dev/homologacao)
-#   letsencrypt — Certbot via webroot compartilhado com o proxy (padrao)
+#   letsencrypt — Certbot rodando dentro do container do proxy, via webroot (padrao)
 #   manual      — Certificados fornecidos pelo usuario (SSL_CERT_FILE + SSL_KEY_FILE)
 #   none        — sem SSL, fallback puramente HTTP
 
-# Diretorio padrao onde nginx espera os certificados (manual/self-signed)
-SSL_CERTS_DIR="${SSL_CERTS_DIR:-/etc/nginx-proxy/certs}"
-
-# Diretorio padrao onde o certbot (letsencrypt) guarda os certificados —
-# derivado de LETSENCRYPT_DIR (lib/nginx.sh) para manter os dois em sincronia
-# quando so LETSENCRYPT_DIR e customizado.
-LETSENCRYPT_LIVE_DIR="${LETSENCRYPT_LIVE_DIR:-${LETSENCRYPT_DIR:-/etc/letsencrypt}/live}"
+# LETSENCRYPT_DIR e LETSENCRYPT_LIVE_DIR NAO sao redeclarados aqui — a fonte
+# unica dos defaults e cctl.conf (sourceado em core_bootstrap antes desta
+# lib), inclusive a derivacao de LETSENCRYPT_LIVE_DIR a partir de
+# LETSENCRYPT_DIR. Esta lib so consome as variaveis ja definidas.
+#
+# Um unico destino de certificado no host: LETSENCRYPT_DIR, montado RW em
+# /etc/letsencrypt no container do proxy. O certbot escreve em
+# live/archive/renewal/accounts; os modos manual/self-signed escrevem direto
+# em <dominio>/{fullchain,privkey}.pem na raiz (sem o segmento "live").
+#
+# certbot roda DENTRO do container do proxy (docker exec), nao no host — ver
+# _ssl_issue_letsencrypt/ssl_renew. O host nao precisa mais do binario
+# certbot.
 
 # mkdir/cp/install com sudo somente quando necessario: ver core_priv_run
-# (lib/core.sh) — usado diretamente pelos handlers de emissao abaixo.
+# (lib/core.sh) — usado diretamente pelos handlers de emissao abaixo (self-
+# signed e manual, que continuam escritos pelo cctl no host).
 
 # Resolve o modo SSL configurado (padrao: letsencrypt)
 _ssl_mode() {
@@ -45,7 +52,7 @@ ssl_get_cert_path() {
     case "${mode}" in
         none) echo ""; return 0 ;;
         letsencrypt) echo "/etc/letsencrypt/live/${domain}/fullchain.pem" ;;
-        manual|self-signed) echo "/etc/nginx/certs/${domain}/fullchain.pem" ;;
+        manual|self-signed) echo "/etc/letsencrypt/${domain}/fullchain.pem" ;;
         *) log_error "SSL_MODE invalido: ${mode}"; return 1 ;;
     esac
 }
@@ -59,7 +66,7 @@ ssl_get_key_path() {
     case "${mode}" in
         none) echo ""; return 0 ;;
         letsencrypt) echo "/etc/letsencrypt/live/${domain}/privkey.pem" ;;
-        manual|self-signed) echo "/etc/nginx/certs/${domain}/privkey.pem" ;;
+        manual|self-signed) echo "/etc/letsencrypt/${domain}/privkey.pem" ;;
         *) log_error "SSL_MODE invalido: ${mode}"; return 1 ;;
     esac
 }
@@ -159,7 +166,7 @@ _ssl_issue_self_signed() {
         return 1
     fi
 
-    local dest_dir="${SSL_CERTS_DIR}/${domain}"
+    local dest_dir="${LETSENCRYPT_DIR}/${domain}"
 
     core_priv_run mkdir -p "${dest_dir}" || {
         log_error "Falha ao criar ${dest_dir}"
@@ -184,10 +191,10 @@ _ssl_issue_self_signed() {
 _ssl_issue_letsencrypt() {
     local domain="$1"
 
-    if ! command -v certbot &>/dev/null; then
-        log_warn "certbot nao encontrado. Instale para SSL automatico."
-        return 1
-    fi
+    # certbot roda dentro do container do proxy (docker exec) — precisa dele
+    # de pe primeiro. Mensagem/precondicao reaproveitada de lib/nginx.sh para
+    # nao duplicar o texto de orientacao ("cctl proxy up").
+    _nginx_proxy_require_container || return 1
 
     if ! validate_dns "${domain}"; then
         log_error "DNS de ${domain} nao resolve — emissao Let's Encrypt abortada."
@@ -196,11 +203,16 @@ _ssl_issue_letsencrypt() {
 
     msg_step "SSL" "Solicitando certificado Let's Encrypt para ${domain}..."
 
-    local webroot="${CERTBOT_WEBROOT_DIR:-/etc/nginx-proxy/certbot}"
+    # Webroot interno ao container (/var/www/certbot) — sem mount, sem variavel
+    # de host (ver cctl.conf). DEPENDENCIA DA F3: a imagem precisa CRIAR esse
+    # diretorio (medido: a imagem crua nao tem nem /var/www). Sem --config-dir/--work-dir/
+    # --logs-dir: dentro do container os defaults do certbot ja sao
+    # /etc/letsencrypt, /var/lib/letsencrypt e /var/log/letsencrypt, que e
+    # exatamente onde LETSENCRYPT_DIR esta montado RW.
     local email="${CERTBOT_EMAIL:-admin@${domain}}"
 
-    if sudo certbot certonly --webroot \
-        -w "${webroot}" \
+    if docker exec "${NGINX_CONTAINER_NAME}" certbot certonly --webroot \
+        -w /var/www/certbot \
         -d "${domain}" \
         --non-interactive \
         --agree-tos \
@@ -243,7 +255,7 @@ _ssl_issue_manual() {
 
     msg_step "SSL" "Instalando certificado manual para ${domain}..."
 
-    local dest_dir="${SSL_CERTS_DIR}/${domain}"
+    local dest_dir="${LETSENCRYPT_DIR}/${domain}"
 
     core_priv_run mkdir -p "${dest_dir}" || { log_error "Falha ao criar ${dest_dir}"; return 1; }
     core_priv_run install -m 644 "${cert_src}" "${dest_dir}/fullchain.pem" || {
@@ -323,12 +335,12 @@ ssl_renew() {
 
     case "${mode}" in
         letsencrypt)
-            if ! command -v certbot &>/dev/null; then
-                log_warn "certbot nao encontrado"
-                return 1
-            fi
+            # Renovacao manual (cctl ssl renew), tambem via docker exec — o
+            # job periodico (cron dentro da imagem) e responsabilidade da F3;
+            # aqui so garantimos que, quando chamado, roda no lugar certo.
+            _nginx_proxy_require_container || return 1
             msg_step "SSL" "Renovando certificados Let's Encrypt..."
-            if sudo certbot renew --quiet; then
+            if docker exec "${NGINX_CONTAINER_NAME}" certbot renew --quiet; then
                 log_success "Certificados renovados"
                 nginx_proxy_reload
             else
@@ -377,7 +389,7 @@ ssl_status() {
             cert_file="${LETSENCRYPT_LIVE_DIR}/${domain}/fullchain.pem"
             ;;
         manual|self-signed)
-            cert_file="${SSL_CERTS_DIR}/${domain}/fullchain.pem"
+            cert_file="${LETSENCRYPT_DIR}/${domain}/fullchain.pem"
             ;;
         *)
             log_error "SSL_MODE invalido: ${mode}"

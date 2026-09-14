@@ -32,6 +32,7 @@ _help_template_commands() {
     echo -e "${BOLD}Comandos disponiveis (repositorio de templates):${RESET}"
     echo "  init <template> <nome>  Inicializa diretorio de projeto a partir de um template"
     echo "  proxy <up|down|reload|test|logs|status>  Gerencia o proxy nginx compartilhado"
+    echo "  paths                   Exibe as raizes efetivas do cctl (CCTL_BASE_DIR e derivadas)"
     echo "  help                    Exibe esta ajuda"
 }
 
@@ -40,6 +41,7 @@ _help_project_commands() {
     echo "  install             Instala a instancia no servidor"
     echo "  ssl <status|issue|renew>  Gerencia o certificado SSL (SSL_MODE do manifest)"
     echo "  proxy <up|down|reload|test|logs|status>  Gerencia o proxy nginx compartilhado"
+    echo "  paths               Exibe as raizes efetivas do cctl (CCTL_BASE_DIR e derivadas)"
     echo "  help                Exibe esta ajuda"
 }
 
@@ -104,6 +106,7 @@ _help_instance_commands() {
     echo "  backup              Executa backup do ambiente"
     echo "  config              Exibe configuracao resolvida"
     echo "  list                Lista instancias instaladas no servidor"
+    echo "  paths               Exibe as raizes efetivas do cctl (CCTL_BASE_DIR e derivadas)"
     echo ""
     echo -e "  ${CYAN}Banco de dados:${RESET}"
     echo "  db-check-config     Verifica config customizada do banco"
@@ -122,6 +125,7 @@ _help_all_commands() {
     echo "  init <template> <nome>  Inicializa diretorio de projeto a partir de um template"
     echo "  install                 Instala a instancia no servidor"
     echo "  proxy <up|down|reload|test|logs|status>  Gerencia o proxy nginx compartilhado"
+    echo "  paths                   Exibe as raizes efetivas do cctl (CCTL_BASE_DIR e derivadas)"
     echo "  help                    Exibe esta ajuda"
     echo ""
     echo -e "${DIM}Execute 'cctl help' dentro do diretorio de um projeto ou de uma instancia instalada para ver todos os comandos.${RESET}"
