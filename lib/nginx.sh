@@ -116,6 +116,58 @@ _nginx_dir_needs_chown() {
     [[ ! -O "$1" ]]
 }
 
+# Caminho estavel do compose renderizado do proxy — "up" e "down" usam o
+# mesmo arquivo (F2.3/R8).
+_nginx_proxy_compose_file() {
+    echo "${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml"
+}
+
+# Renderiza o compose do proxy nativo em "$1" (heredoc sem aspas — interpola
+# as vars do shell no momento da chamada). Contrato (D-F2.3-e, tests/proxy.bats):
+# cap_add NET_RAW, portas, mounts de sites-available/sites-enabled, vhosts.d
+# (RO), letsencrypt (RW, D3 — bind mount do host, NAO o volume nomeado da
+# imagem), volume nomeado "log", limites de memoria/cpu e rede
+# PROXY_NETWORK como external (o cctl nao e dono do ciclo de vida da rede
+# aqui dentro do compose — ela e criada/gerenciada por nginx_proxy_up via
+# "docker network create", ver acima).
+_proxy_compose_render() {
+    local _compose_file="$1"
+
+    cat > "${_compose_file}" <<EOF
+services:
+  nginx-proxy:
+    image: ${NGINX_PROXY_IMAGE}
+    container_name: ${NGINX_CONTAINER_NAME}
+    restart: unless-stopped
+    cap_add:
+      - NET_RAW
+    ports:
+      - "${PROXY_HTTP_PORT}:80"
+      - "${PROXY_HTTPS_PORT}:443"
+    volumes:
+      - ${CCTL_BASE_DIR}/nginx-proxy/sites-available:/etc/nginx/sites-available
+      - ${CCTL_BASE_DIR}/nginx-proxy/sites-enabled:/etc/nginx/sites-enabled
+      - ${NGINX_VHOSTS_DIR}:/etc/nginx/conf.d/vhosts:ro
+      - ${LETSENCRYPT_DIR}:/etc/letsencrypt:rw
+      - log:/var/log/nginx
+    deploy:
+      resources:
+        limits:
+          memory: ${NGINX_MEMORY_LIMIT}
+          cpus: "${NGINX_CPU_LIMIT}"
+    networks:
+      - proxy-net
+
+networks:
+  proxy-net:
+    name: ${PROXY_NETWORK}
+    external: true
+
+volumes:
+  log:
+EOF
+}
+
 nginx_proxy_up() {
     if ! docker network inspect "${PROXY_NETWORK}" >/dev/null 2>&1; then
         msg_info "Criando rede ${PROXY_NETWORK}..."
@@ -132,6 +184,8 @@ nginx_proxy_up() {
         "${CCTL_INSTANCE_BASE_DIR}"
         "${NGINX_VHOSTS_DIR}"
         "${LETSENCRYPT_DIR}"
+        "${CCTL_BASE_DIR}/nginx-proxy/sites-available"
+        "${CCTL_BASE_DIR}/nginx-proxy/sites-enabled"
     )
     local _proxy_dir
     for _proxy_dir in "${_proxy_dirs[@]}"; do
@@ -139,18 +193,31 @@ nginx_proxy_up() {
     done
 
     local _proxy_owner="${SUDO_USER:-$(id -un)}"
-    if _nginx_dir_needs_chown "${CCTL_BASE_DIR}"; then
-        local _proxy_chown_err
-        if ! _proxy_chown_err="$(sudo chown "${_proxy_owner}:${_proxy_owner}" "${CCTL_BASE_DIR}" 2>&1)"; then
-            log_warn "Falha ao ajustar dono de ${CCTL_BASE_DIR} para ${_proxy_owner} (siga usando sudo para operacoes nesta arvore): ${_proxy_chown_err}"
+    # CCTL_BASE_DIR e o diretorio intermediario nginx-proxy/ recebem chown SEM
+    # "-R": precisam ser gravaveis pelo operador (o compose e escrito em
+    # nginx-proxy/docker-compose.yaml), mas sem arrastar letsencrypt/ (certs/)
+    # por baixo — que continua root-owned (chaves privadas). As folhas
+    # operacionais recebem "-R" individualmente no bloco seguinte.
+    local -a _proxy_owned_roots=(
+        "${CCTL_BASE_DIR}"
+        "${CCTL_BASE_DIR}/nginx-proxy"
+    )
+    local _proxy_owned_root _proxy_chown_root_err
+    for _proxy_owned_root in "${_proxy_owned_roots[@]}"; do
+        if _nginx_dir_needs_chown "${_proxy_owned_root}"; then
+            if ! _proxy_chown_root_err="$(sudo chown "${_proxy_owner}:${_proxy_owner}" "${_proxy_owned_root}" 2>&1)"; then
+                log_warn "Falha ao ajustar dono de ${_proxy_owned_root} para ${_proxy_owner} (siga usando sudo para operacoes nesta arvore): ${_proxy_chown_root_err}"
+            fi
         fi
-    fi
+    done
 
     # Folhas operacionais apenas — LETSENCRYPT_DIR fica de fora (root-owned,
     # ver comentario acima do container/proximo de nginx_proxy_up).
     local -a _proxy_owned_dirs=(
         "${CCTL_INSTANCE_BASE_DIR}"
         "${NGINX_VHOSTS_DIR}"
+        "${CCTL_BASE_DIR}/nginx-proxy/sites-available"
+        "${CCTL_BASE_DIR}/nginx-proxy/sites-enabled"
     )
     local _proxy_owned_dir _proxy_chown_leaf_err
     for _proxy_owned_dir in "${_proxy_owned_dirs[@]}"; do
@@ -188,16 +255,14 @@ nginx_proxy_up() {
     fi
 
     msg_info "Subindo container ${NGINX_CONTAINER_NAME} (${NGINX_PROXY_IMAGE})..."
-    if docker run -d \
-        --name "${NGINX_CONTAINER_NAME}" \
-        --network "${PROXY_NETWORK}" \
-        --restart unless-stopped \
-        --cap-add NET_RAW \
-        -p "${PROXY_HTTP_PORT}:80" \
-        -p "${PROXY_HTTPS_PORT}:443" \
-        -v "${NGINX_VHOSTS_DIR}:/etc/nginx/conf.d/vhosts:ro" \
-        -v "${LETSENCRYPT_DIR}:/etc/letsencrypt:rw" \
-        "${NGINX_PROXY_IMAGE}" >/dev/null; then
+    local _compose_file
+    _compose_file="$(_nginx_proxy_compose_file)"
+    if ! _proxy_compose_render "${_compose_file}"; then
+        log_error "Falha ao renderizar ${_compose_file}"
+        return 1
+    fi
+
+    if docker compose -p "${NGINX_CONTAINER_NAME}" -f "${_compose_file}" up -d >/dev/null; then
         msg_success "Proxy ${NGINX_CONTAINER_NAME} em execucao (rede ${PROXY_NETWORK})"
         return 0
     fi
@@ -223,6 +288,12 @@ nginx_proxy_down() {
     fi
 
     msg_info "Parando ${NGINX_CONTAINER_NAME}..."
+    # Para e remove por nome (docker stop+rm): robusto tanto para container
+    # criado pelo compose (up) quanto por um `docker run` antigo (migracao) —
+    # `docker compose down` so enxerga containers com os labels do projeto e
+    # dependia de um arquivo de compose que nao era garantido existir (B2 da
+    # auditoria). O volume nomeado "log" e a rede external persistem (rm nao
+    # os remove).
     docker stop "${NGINX_CONTAINER_NAME}" >/dev/null 2>&1
 
     if ! docker rm "${NGINX_CONTAINER_NAME}" >/dev/null 2>&1; then

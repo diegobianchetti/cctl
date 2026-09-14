@@ -24,6 +24,8 @@ setup() {
     export CCTL_INSTANCE_BASE_DIR="${WORKDIR}/base/instances"
     export NGINX_VHOSTS_DIR="${WORKDIR}/vhosts.d"
     export LETSENCRYPT_DIR="${WORKDIR}/letsencrypt"
+    export NGINX_MEMORY_LIMIT="512M"
+    export NGINX_CPU_LIMIT="1"
 
     mock_sudo_passthrough
 }
@@ -92,6 +94,21 @@ _mock_docker_proxy() {
                 [[ "'"${DOCKER_RM_FAIL:-0}"'" == "1" ]] && exit 1
                 exit 0
                 ;;
+            compose)
+                for a in "$@"; do
+                    case "$a" in
+                        up)
+                            [[ "'"${DOCKER_RUN_FAIL:-0}"'" == "1" ]] && exit 1
+                            exit 0
+                            ;;
+                        down)
+                            [[ "'"${DOCKER_RM_FAIL:-0}"'" == "1" ]] && exit 1
+                            exit 0
+                            ;;
+                    esac
+                done
+                exit 0
+                ;;
             exec)
                 for a in "$@"; do
                     if [[ "$a" == "-t" ]]; then
@@ -147,13 +164,23 @@ _mock_docker_proxy() {
     [[ -d "${CCTL_INSTANCE_BASE_DIR}" ]]
 }
 
-@test "nginx_proxy_up: sobe o container via docker run quando ele nao existe" {
+@test "nginx_proxy_up: sobe o container via docker compose quando ele nao existe" {
     DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="" _mock_docker_proxy
 
     run nginx_proxy_up
     assert_success
-    grep -q "^run " "${WORKDIR}/docker.log"
-    grep -q "nginx-proxy" "${WORKDIR}/docker.log"
+    grep -q "^compose " "${WORKDIR}/docker.log"
+    grep -q -- "-p nginx-proxy" "${WORKDIR}/docker.log"
+    grep -q " up -d" "${WORKDIR}/docker.log"
+}
+
+@test "nginx_proxy_up: renderiza o compose no caminho estavel dentro de CCTL_BASE_DIR" {
+    DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="" _mock_docker_proxy
+
+    run nginx_proxy_up
+    assert_success
+    [[ -f "${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml" ]]
+    grep -q -- "-f ${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml" "${WORKDIR}/docker.log"
 }
 
 @test "nginx_proxy_up: monta vhosts no subdiretorio conf.d/vhosts (nao sobrepoe conf.d inteiro)" {
@@ -161,8 +188,9 @@ _mock_docker_proxy() {
 
     run nginx_proxy_up
     assert_success
-    grep -q -- "-v ${NGINX_VHOSTS_DIR}:/etc/nginx/conf.d/vhosts:ro" "${WORKDIR}/docker.log"
-    run grep -q -- "-v ${NGINX_VHOSTS_DIR}:/etc/nginx/conf.d:ro" "${WORKDIR}/docker.log"
+    local compose_file="${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml"
+    grep -q -- "${NGINX_VHOSTS_DIR}:/etc/nginx/conf.d/vhosts:ro" "${compose_file}"
+    run grep -q -- "${NGINX_VHOSTS_DIR}:/etc/nginx/conf.d:ro" "${compose_file}"
     assert_failure
 }
 
@@ -171,9 +199,20 @@ _mock_docker_proxy() {
 
     run nginx_proxy_up
     assert_success
-    grep -q -- "-v ${LETSENCRYPT_DIR}:/etc/letsencrypt:rw" "${WORKDIR}/docker.log"
+    local compose_file="${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml"
+    grep -q -- "${LETSENCRYPT_DIR}:/etc/letsencrypt:rw" "${compose_file}"
     # prova de aceite: NAO pode ter regredido para :ro
-    run grep -q -- "-v ${LETSENCRYPT_DIR}:/etc/letsencrypt:ro" "${WORKDIR}/docker.log"
+    run grep -q -- "${LETSENCRYPT_DIR}:/etc/letsencrypt:ro" "${compose_file}"
+    assert_failure
+}
+
+@test "nginx_proxy_up: certs continua bind mount RW do host (NAO o volume nomeado 'letsencrypt' da imagem, D3)" {
+    DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="" _mock_docker_proxy
+
+    run nginx_proxy_up
+    assert_success
+    local compose_file="${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml"
+    run grep -q -- "^  letsencrypt:$" "${compose_file}"
     assert_failure
 }
 
@@ -182,7 +221,8 @@ _mock_docker_proxy() {
 
     run nginx_proxy_up
     assert_success
-    run grep -q -- "/etc/nginx/certs" "${WORKDIR}/docker.log"
+    local compose_file="${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml"
+    run grep -q -- "/etc/nginx/certs" "${compose_file}"
     assert_failure
 }
 
@@ -191,8 +231,18 @@ _mock_docker_proxy() {
 
     run nginx_proxy_up
     assert_success
-    run grep -q -- "/var/www/certbot" "${WORKDIR}/docker.log"
+    local compose_file="${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml"
+    run grep -q -- "/var/www/certbot" "${compose_file}"
     assert_failure
+}
+
+@test "nginx_proxy_up: cria os diretorios sites-available e sites-enabled sob nginx-proxy/" {
+    DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="" _mock_docker_proxy
+
+    run nginx_proxy_up
+    assert_success
+    [[ -d "${CCTL_BASE_DIR}/nginx-proxy/sites-available" ]]
+    [[ -d "${CCTL_BASE_DIR}/nginx-proxy/sites-enabled" ]]
 }
 
 # --- nginx_proxy_up: chown das folhas (regressao B2) -----------------------
@@ -217,6 +267,11 @@ _mock_docker_proxy() {
     grep -q -- "sudo-called: chown -R ${owner}:${owner} ${NGINX_VHOSTS_DIR}" "${WORKDIR}/sudo.log"
     # CCTL_BASE_DIR em si recebe chown, mas SEM "-R"
     grep -q -- "sudo-called: chown ${owner}:${owner} ${CCTL_BASE_DIR}" "${WORKDIR}/sudo.log"
+    # nginx-proxy/ (intermediario) tambem recebe chown SEM "-R" (B1) — precisa
+    # ser gravavel para o compose, sem arrastar certs/ por baixo.
+    grep -q -- "sudo-called: chown ${owner}:${owner} ${CCTL_BASE_DIR}/nginx-proxy\$" "${WORKDIR}/sudo.log"
+    run grep -q -- "sudo-called: chown -R ${owner}:${owner} ${CCTL_BASE_DIR}/nginx-proxy\$" "${WORKDIR}/sudo.log"
+    assert_failure
 
     # (b) letsencrypt NAO aparece em nenhuma chamada de chown — e a
     # regressao do B2: sem esta assercao, o blocker volta sem ninguem notar
@@ -237,21 +292,45 @@ _mock_docker_proxy() {
     assert_failure
 }
 
-@test "nginx_proxy_up: inclui --cap-add NET_RAW (contrato do docker-compose do nginx-proxy)" {
+@test "nginx_proxy_up: inclui cap_add NET_RAW no compose (contrato do docker-compose do nginx-proxy)" {
     DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="" _mock_docker_proxy
 
     run nginx_proxy_up
     assert_success
-    grep -q -- "--cap-add NET_RAW" "${WORKDIR}/docker.log"
+    local compose_file="${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml"
+    grep -q -- "cap_add" "${compose_file}"
+    grep -q -- "NET_RAW" "${compose_file}"
 }
 
-@test "nginx_proxy_up: publica as portas HTTP e HTTPS configuradas" {
+@test "nginx_proxy_up: publica as portas HTTP e HTTPS configuradas no compose" {
     DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="" _mock_docker_proxy
 
     run nginx_proxy_up
     assert_success
-    grep -q -- "-p 80:80" "${WORKDIR}/docker.log"
-    grep -q -- "-p 443:443" "${WORKDIR}/docker.log"
+    local compose_file="${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml"
+    grep -q -- '"80:80"' "${compose_file}"
+    grep -q -- '"443:443"' "${compose_file}"
+}
+
+@test "nginx_proxy_up: inclui volume nomeado 'log' e limites de memoria/cpu no compose" {
+    DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="" _mock_docker_proxy
+
+    run nginx_proxy_up
+    assert_success
+    local compose_file="${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml"
+    grep -q -- "log:/var/log/nginx" "${compose_file}"
+    grep -q -- "memory: 512M" "${compose_file}"
+    grep -q -- 'cpus: "1"' "${compose_file}"
+}
+
+@test "nginx_proxy_up: rede do compose e external, apontando para PROXY_NETWORK" {
+    DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="" _mock_docker_proxy
+
+    run nginx_proxy_up
+    assert_success
+    local compose_file="${CCTL_BASE_DIR}/nginx-proxy/docker-compose.yaml"
+    grep -q -- "external: true" "${compose_file}"
+    grep -q -- "name: ${PROXY_NETWORK}" "${compose_file}"
 }
 
 @test "nginx_proxy_up: idempotente — avisa sem falhar se o container ja esta rodando" {
@@ -260,7 +339,7 @@ _mock_docker_proxy() {
     run nginx_proxy_up
     assert_success
     assert_output --partial "ja esta em execucao"
-    run grep -q "^run " "${WORKDIR}/docker.log"
+    run grep -q "^compose " "${WORKDIR}/docker.log"
     assert_failure
 }
 
@@ -270,7 +349,7 @@ _mock_docker_proxy() {
     run nginx_proxy_up
     assert_success
     grep -q "^start " "${WORKDIR}/docker.log"
-    run grep -q "^run " "${WORKDIR}/docker.log"
+    run grep -q "^compose " "${WORKDIR}/docker.log"
     assert_failure
 }
 
@@ -281,7 +360,7 @@ _mock_docker_proxy() {
     run nginx_proxy_up
     assert_failure
     assert_output --partial "PROXY_HTTP_PORT invalido"
-    run grep -q "^run " "${WORKDIR}/docker.log"
+    run grep -q "^compose " "${WORKDIR}/docker.log"
     assert_failure
 }
 
@@ -292,11 +371,11 @@ _mock_docker_proxy() {
     run nginx_proxy_up
     assert_failure
     assert_output --partial "PROXY_HTTPS_PORT invalido"
-    run grep -q "^run " "${WORKDIR}/docker.log"
+    run grep -q "^compose " "${WORKDIR}/docker.log"
     assert_failure
 }
 
-@test "nginx_proxy_up: retorna 1 e loga erro quando docker run falha" {
+@test "nginx_proxy_up: retorna 1 e loga erro quando docker compose up falha" {
     DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="" DOCKER_RUN_FAIL=1 _mock_docker_proxy
 
     run nginx_proxy_up
@@ -304,9 +383,20 @@ _mock_docker_proxy() {
     assert_output --partial "Falha ao subir o container"
 }
 
+@test "nginx_proxy_up: retorna 1 quando o render do compose falha (B1)" {
+    DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="" _mock_docker_proxy
+    _proxy_compose_render() { return 1; }
+
+    run nginx_proxy_up
+    assert_failure
+    assert_output --partial "Falha ao renderizar"
+    run grep -q "^compose " "${WORKDIR}/docker.log"
+    assert_failure
+}
+
 # --- nginx_proxy_down --------------------------------------------------------
 
-@test "nginx_proxy_down: para e remove o container quando ele existe" {
+@test "nginx_proxy_down: derruba via docker stop+rm quando o container existe" {
     DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="running" _mock_docker_proxy
 
     run nginx_proxy_down
@@ -321,7 +411,7 @@ _mock_docker_proxy() {
     run nginx_proxy_down
     assert_success
     assert_output --partial "nao existe"
-    run grep -q "^stop " "${WORKDIR}/docker.log"
+    run grep -qE "^(stop|rm) " "${WORKDIR}/docker.log"
     assert_failure
 }
 
@@ -331,6 +421,74 @@ _mock_docker_proxy() {
     run nginx_proxy_down
     assert_failure
     assert_output --partial "Falha ao remover o container"
+}
+
+# --- _proxy_compose_render: teste de contrato (D-F2.3-e, R8) ----------------
+#
+# Falha se o compose renderizado DERIVAR do contrato: cada assercao aqui e
+# individual de proposito (nao um grep unico com varios padroes) — remover
+# qualquer um destes itens do template em lib/nginx.sh derruba a assercao
+# correspondente, nao um bloco inteiro. NGINX_MEMORY_LIMIT/NGINX_CPU_LIMIT
+# setados explicitamente no setup (nao dependem do default do cctl.conf).
+
+@test "_proxy_compose_render: contrato completo do compose do proxy nativo" {
+    export NGINX_MEMORY_LIMIT="512M"
+    export NGINX_CPU_LIMIT="1"
+    local compose_file="${WORKDIR}/compose-contract.yaml"
+
+    _proxy_compose_render "${compose_file}"
+
+    [[ -f "${compose_file}" ]]
+
+    # imagem e nome do container (tem de continuar "nginx-proxy" — todo o
+    # codigo faz "docker exec nginx-proxy ...")
+    grep -q -- "image: ${NGINX_PROXY_IMAGE}" "${compose_file}"
+    grep -q -- "container_name: ${NGINX_CONTAINER_NAME}" "${compose_file}"
+
+    # capability
+    grep -q -- "cap_add:" "${compose_file}"
+    grep -q -- "- NET_RAW" "${compose_file}"
+
+    # portas
+    grep -q -- '"'"${PROXY_HTTP_PORT}"':80"' "${compose_file}"
+    grep -q -- '"'"${PROXY_HTTPS_PORT}"':443"' "${compose_file}"
+
+    # mounts: sites-available/sites-enabled (D-F2.3-b)
+    grep -q -- "${CCTL_BASE_DIR}/nginx-proxy/sites-available:/etc/nginx/sites-available" "${compose_file}"
+    grep -q -- "${CCTL_BASE_DIR}/nginx-proxy/sites-enabled:/etc/nginx/sites-enabled" "${compose_file}"
+
+    # mount vhosts.d RO (D11)
+    grep -q -- "${NGINX_VHOSTS_DIR}:/etc/nginx/conf.d/vhosts:ro" "${compose_file}"
+
+    # mount certs RW — bind mount do host, NAO o volume nomeado da imagem (D3)
+    grep -q -- "${LETSENCRYPT_DIR}:/etc/letsencrypt:rw" "${compose_file}"
+    run grep -q -- "^  letsencrypt:$" "${compose_file}"
+    assert_failure
+
+    # volume nomeado "log" (D-F2.3-c)
+    grep -q -- "log:/var/log/nginx" "${compose_file}"
+    grep -q -- "^  log:$" "${compose_file}"
+
+    # limites (D-F2.3-c, configuraveis)
+    grep -q -- "memory: 512M" "${compose_file}"
+    grep -q -- 'cpus: "1"' "${compose_file}"
+
+    # rede external (D-F2.3-d)
+    grep -q -- "external: true" "${compose_file}"
+    grep -q -- "name: ${PROXY_NETWORK}" "${compose_file}"
+}
+
+@test "_proxy_compose_render: limites de memoria/cpu respeitam override das vars" {
+    export NGINX_MEMORY_LIMIT="1G"
+    export NGINX_CPU_LIMIT="2"
+    local compose_file="${WORKDIR}/compose-contract-override.yaml"
+
+    _proxy_compose_render "${compose_file}"
+
+    grep -q -- "memory: 1G" "${compose_file}"
+    grep -q -- 'cpus: "2"' "${compose_file}"
+    run grep -q -- "memory: 512M" "${compose_file}"
+    assert_failure
 }
 
 # --- nginx_proxy_reload ------------------------------------------------------
