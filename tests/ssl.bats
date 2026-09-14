@@ -10,7 +10,7 @@ setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh core.sh validate.sh nginx.sh ssl.sh
+    source_lib colors.sh log.sh core.sh validate.sh nginx.sh vhost.sh ssl.sh
     # shellcheck source=/dev/null
     source "${CCTL_ROOT}/commands/ssl.sh"
 

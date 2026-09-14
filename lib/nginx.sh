@@ -15,6 +15,13 @@ _nginx_priv() {
 }
 
 # Instala config do site no nginx-proxy
+#
+# Wrapper fino sobre vhost_write (lib/vhost.sh) — mantem os pre-checks (src
+# existe, NGINX_VHOSTS_DIR existe) e delega a garantia unica (backup ->
+# aplicar -> nginx -t -> reverter em falha) ao modulo. Ate a F2.2 este
+# caminho APAGAVA o vhost em falha de nginx -t; agora RESTAURA, igual aos
+# outros dois donos (nginx_disable_site, _rollout_switch_vhost) — ver
+# regressao R1 em tests/nginx.bats.
 nginx_enable_site() {
     local domain="${1:-${DOMAIN_NAME}}"
     local nginx_conf_src="${2:-./nginx/site.conf}"
@@ -31,57 +38,30 @@ nginx_enable_site() {
 
     local vhost_dst="${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf"
 
-    if ! _nginx_priv cp "${nginx_conf_src}" "${vhost_dst}"; then
-        log_error "Falha ao copiar configuracao nginx para ${vhost_dst}"
-        return 1
-    fi
-
-    if nginx_test_and_reload; then
+    if vhost_write "${nginx_conf_src}" "${vhost_dst}"; then
         log_success "Site ${domain} habilitado no nginx-proxy"
         return 0
-    else
-        log_error "Config nginx invalida! Revertendo..."
-        _nginx_priv rm -f "${vhost_dst}"
-        return 1
     fi
+    return 1
 }
 
 # Remove config do site do nginx-proxy
+#
+# Wrapper fino sobre vhost_remove (lib/vhost.sh) — comportamento observavel
+# identico ao anterior (backup -> remove -> testa -> restaura em falha), so
+# que via garantia unica compartilhada.
 nginx_disable_site() {
     local domain="${1:-${DOMAIN_NAME}}"
     local vhost_dst="${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf"
-    local backup_dir
-    backup_dir="$(mktemp -d "${TMPDIR:-/tmp}/cctl_nginx_backup.XXXXXX")" || {
-        log_error "Falha ao criar diretorio de backup temporario"
-        return 1
-    }
-
-    if [[ -f "${vhost_dst}" ]]; then
-        core_priv_run cp -p "${vhost_dst}" "${backup_dir}/" || {
-            log_error "Falha ao criar backup do vhost ${vhost_dst}"
-            rm -rf "${backup_dir}"
-            return 1
-        }
-    fi
 
     msg_info "Removendo configuracao nginx para ${domain}..."
     echo -e "  ${CYAN}${vhost_dst}${RESET}"
-    _nginx_priv rm -f "${vhost_dst}"
 
-    if nginx_test_and_reload; then
-        rm -rf "${backup_dir}"
+    if vhost_remove "${vhost_dst}"; then
         log_success "Site ${domain} removido do nginx-proxy"
         return 0
-    else
-        log_error "Config nginx invalida apos remocao! Restaurando..."
-        if [[ -f "${backup_dir}/${COMPOSE_PROJECT_NAME}.conf" ]]; then
-            core_priv_run cp -p "${backup_dir}/${COMPOSE_PROJECT_NAME}.conf" "${vhost_dst}" || \
-                log_error "Falha ao restaurar vhost de backup para ${vhost_dst}"
-        fi
-        nginx_test_and_reload
-        rm -rf "${backup_dir}"
-        return 1
     fi
+    return 1
 }
 
 # Testa config nginx e recarrega se valida
