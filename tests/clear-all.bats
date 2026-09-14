@@ -10,7 +10,7 @@ setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh network.sh volumes.sh compose.sh nginx.sh cron.sh
+    source_lib colors.sh log.sh core.sh network.sh volumes.sh compose.sh nginx.sh cron.sh
 
     WORKDIR="$(make_tmp_workdir)"
     cd "${WORKDIR}" || return 1
@@ -21,6 +21,10 @@ setup() {
     unset COMPOSE_FILES DOMAIN_NAME 2>/dev/null || true
 
     mock_sudo_passthrough "${WORKDIR}/sudo.log"
+    mock_crontab "${WORKDIR}/crontab.store"
+    export CRON_DIR="${WORKDIR}/cron.d"
+    export LOGROTATE_DIR="${WORKDIR}/logrotate.d"
+    mkdir -p "${CRON_DIR}" "${LOGROTATE_DIR}"
 
     # shellcheck source=/dev/null
     source "${CCTL_ROOT}/commands/clear-all.sh"
@@ -75,4 +79,33 @@ teardown() {
     assert_failure
     run cat "${WORKDIR}/docker_calls.log"
     refute_output --partial "volume rm"
+}
+
+@test "cmd_clear-all: remove logrotate via core_priv_run sem sudo quando LOGROTATE_DIR e gravavel" {
+    declare -A CCTL_TEST_VOLS=( [moodle_dbdata]="moodle" )
+    mock_docker_with_volumes CCTL_TEST_VOLS "${WORKDIR}/docker_calls.log"
+
+    local logrotate_file="${LOGROTATE_DIR}/rotate-apache-logs-moodle"
+    : > "${logrotate_file}"
+
+    run cmd_clear-all <<< "moodle"
+    assert_success
+    [[ ! -f "${logrotate_file}" ]]
+    # LOGROTATE_DIR ja era gravavel: a remocao do logrotate nao deveria ter
+    # precisado de sudo (docker volume rm neste round nao chama mais sudo
+    # diretamente — ver commands/clear-all.sh:40 e lib/volumes.sh:179 — entao
+    # o caminho feliz nao deveria ter nenhuma chamada de sudo registrada).
+    # A asserção precisa ser real: sudo.log so e criado quando o mock e
+    # efetivamente invocado, entao "nao existe" e o resultado esperado aqui;
+    # se existir (regressao futura chamando sudo em algum ponto), o conteudo
+    # tem que ser inspecionado de verdade em vez de um `cat` vazio que faria
+    # o refute_output passar sem checar nada.
+    if [[ -f "${WORKDIR}/sudo.log" ]]; then
+        run cat "${WORKDIR}/sudo.log"
+        assert_success
+        refute_output --partial "rm -f ${logrotate_file}"
+    else
+        # Caminho esperado: nenhuma chamada de sudo foi feita.
+        true
+    fi
 }

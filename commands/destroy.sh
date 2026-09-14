@@ -31,8 +31,14 @@ cmd_destroy() {
     cd /tmp || exit 1
 
     if [[ -d "${instance_dir}" && "${instance_dir}" != "/" && "${instance_dir}" != "${HOME}" ]]; then
-        sudo rm -rf "${instance_dir}"
-        log_success "Diretorio ${instance_dir} removido"
+        # core_priv_run so usa sudo quando o diretorio nao e removivel pelo
+        # usuario atual — assim `cctl destroy` funciona no perfil sem sudo
+        # (instancia dentro do $HOME), onde `sudo rm -rf` falharia.
+        if core_priv_run rm -rf "${instance_dir}"; then
+            log_success "Diretorio ${instance_dir} removido"
+        else
+            log_warn "Nao foi possivel remover ${instance_dir} — remova manualmente"
+        fi
     else
         log_warn "Diretorio nao removido por seguranca: ${instance_dir}"
     fi

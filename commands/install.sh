@@ -283,7 +283,9 @@ EOF
     return "${result}"
 }
 
-# Instala cron entries no host (se HOST_CRON=true)
+# Instala cron entries no host (se HOST_CRON=true) — logica real em
+# lib/cron.sh:cron_install (CRON_DIR + core_priv_run + fallback pra crontab
+# do usuario); aqui so o guard de HOST_CRON e a mensagem de etapa do install.
 _install_cron() {
     if [[ "${HOST_CRON:-false}" != "true" ]]; then
         log_debug "HOST_CRON desabilitado, pulando cron"
@@ -291,24 +293,7 @@ _install_cron() {
     fi
 
     msg_step "CRON" "Instalando cron jobs..."
-
-    # Procura arquivos .cron no diretorio cron/
-    local cron_dir="./cron"
-    if [[ ! -d "${cron_dir}" ]]; then
-        log_debug "Diretorio cron/ nao encontrado, pulando"
-        return 0
-    fi
-
-    local cron_file
-    for cron_file in "${cron_dir}"/*.cron; do
-        [[ -f "${cron_file}" ]] || continue
-        local cron_name
-        cron_name=$(basename "${cron_file}" .cron)
-        local dest="/etc/cron.d/${cron_name}-${COMPOSE_PROJECT_NAME}"
-        sudo cp "${cron_file}" "${dest}"
-        sudo chmod 644 "${dest}"
-        log_success "Cron instalado: ${dest}"
-    done
+    cron_install
 }
 
 # Executa hook post-install (se definido no manifest)
