@@ -7,10 +7,6 @@
 .cctl-rollout
 docker-compose.rollout.yaml
 
-# Arquivos de sessão local (não vão para o repositório público)
-WORK_LOG.md
-CLAUDE.md
-
 # Logs
 logs/
 *.log
