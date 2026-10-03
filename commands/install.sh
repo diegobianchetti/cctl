@@ -329,4 +329,20 @@ INSTALLED_BY="$(whoami)@$(hostname)"
 EOF
 
     log_debug ".cctl-instance gravado"
+
+    # Registra/atualiza o inventario (F2.4) DEPOIS do .cctl-instance ja
+    # estar gravado — e esse arquivo, nao o inventario, que e a fonte de
+    # verdade de "instancia instalada" (core_detect_context). Se nao havia
+    # registro "prepared" (projeto nunca passou por `cctl init`, ou
+    # inventario anterior a F2.4), inventory_mark_installed cria um novo
+    # registro direto em installed, adotando a instancia.
+    #
+    # Falha aqui NAO aborta o install: a instancia ja esta funcional
+    # (containers de pe, .cctl-instance gravado) — mesmo criterio dos
+    # demais passos nao-essenciais do fluxo (cron, hook post-install, ver
+    # acima). log_error (nao log_warn) porque, diferente deles, o efeito e
+    # "cctl list" nao ver esta instancia — vale a visibilidade mais forte.
+    if ! inventory_mark_installed "${COMPOSE_PROJECT_NAME}" "${PROJECT_TYPE}" "${CLIENT_NAME}" "${DOMAIN_NAME}" "$(pwd)"; then
+        log_error "Instancia instalada, mas falhou o registro/atualizacao no inventario (cctl list pode nao refletir esta instancia)."
+    fi
 }

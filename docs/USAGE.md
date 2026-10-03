@@ -238,7 +238,11 @@ as instancias do host, na rede `PROXY_NETWORK` (default `cctl-proxy-net`).
 | `cctl build --push [--registry <url>]` | Publica as imagens construidas no registry |
 | `cctl update` | Pull de imagens atualizadas e recria containers |
 | `cctl backup` | Executa backup (dump do banco + volumes) |
-| `cctl list` | Lista instancias instaladas no servidor |
+| `cctl list` | Lista instancias registradas, com estado `prepared`, `installed` ou `stale` |
+
+O inventario é escrito pelo `cctl init` e atualizado pelo `cctl install`. Ele também
+inclui projetos criados com `--dest` fora de `CCTL_INSTANCE_BASE_DIR`; o registro fica
+em `${CCTL_INVENTORY_DIR}` (por padrão, `${CCTL_INSTANCE_BASE_DIR}/.inventory`).
 
 ### Rollout (Blue/Green)
 
@@ -501,8 +505,8 @@ token e sem sessao, falha com erro claro antes de tentar qualquer login.
 Voce esta rodando um comando operacional fora do diretorio da instancia. Navegue ate o diretorio correto:
 
 ```bash
-cd <diretorio-onde-o-cctl-init-foi-executado>/<projeto>-<cliente>
-# convencao: sob CCTL_INSTANCE_BASE_DIR (default /opt/cctl/instances) — ver 'cctl paths'
+cd <diretorio-da-instancia>
+# o destino pode ser arbitrario; consulte 'cctl list' para ver o caminho registrado
 ```
 
 ### "Instancia ja instalada"

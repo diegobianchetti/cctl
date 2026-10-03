@@ -12,12 +12,16 @@ setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh core.sh env.sh network.sh compose.sh nginx.sh vhost.sh ssl.sh
+    source_lib colors.sh log.sh core.sh env.sh network.sh compose.sh nginx.sh vhost.sh ssl.sh inventory.sh
     # shellcheck source=/dev/null
     source "${CCTL_ROOT}/commands/install.sh"
 
     WORKDIR="$(make_tmp_workdir)"
     cd "${WORKDIR}" || return 1
+
+    # Inventario isolado dentro do WORKDIR — F2.4: _install_write_instance_file
+    # chama inventory_mark_installed depois de gravar .cctl-instance.
+    export CCTL_INVENTORY_DIR="${WORKDIR}/inventory"
 
     export NGINX_VHOSTS_DIR="${WORKDIR}/vhosts"
     mkdir -p "${NGINX_VHOSTS_DIR}"
@@ -256,4 +260,71 @@ EOF
 
     grep -qE "^SSL_CERT_PATH=$" .env
     grep -qE "^SSL_KEY_PATH=$" .env
+}
+
+# ============================================================
+# _install_write_instance_file (F2.4: registro no inventario)
+# ============================================================
+
+@test "_install_write_instance_file: grava .cctl-instance E registra installed no inventario" {
+    export PROJECT_TYPE="moodle"
+    export CLIENT_NAME="acme"
+    export DOMAIN_NAME="acme.example.com"
+    export COMPOSE_PROJECT_NAME="acme"
+    export CCTL_VERSION="0.1.0"
+
+    run _install_write_instance_file
+    assert_success
+
+    [[ -f ./.cctl-instance ]]
+    [[ -f "${CCTL_INVENTORY_DIR}/acme.tsv" ]]
+    run grep -q $'STATUS\tinstalled' "${CCTL_INVENTORY_DIR}/acme.tsv"
+    assert_success
+    run grep -q $'INSTANCE_DIR\t'"${WORKDIR}" "${CCTL_INVENTORY_DIR}/acme.tsv"
+    assert_success
+}
+
+@test "_install_write_instance_file: adota instancia sem registro prepared previo (instalacao fora do cctl init)" {
+    export PROJECT_TYPE="moodle"
+    export CLIENT_NAME="acme"
+    export DOMAIN_NAME="acme.example.com"
+    export COMPOSE_PROJECT_NAME="acme"
+    export CCTL_VERSION="0.1.0"
+
+    [[ ! -f "${CCTL_INVENTORY_DIR}/acme.tsv" ]]
+
+    run _install_write_instance_file
+    assert_success
+    [[ -f "${CCTL_INVENTORY_DIR}/acme.tsv" ]]
+}
+
+@test "_install_write_instance_file: falha no registro de inventario NAO impede .cctl-instance de ser gravado" {
+    export PROJECT_TYPE="moodle"
+    export CLIENT_NAME="acme"
+    export DOMAIN_NAME="acme.example.com"
+    export COMPOSE_PROJECT_NAME="acme"
+    export CCTL_VERSION="0.1.0"
+
+    # Colisao deliberada: "acme" ja registrado em outro instance_dir existente.
+    local collision_dir="${WORKDIR}/outro/caminho/acme"
+    mkdir -p "${CCTL_INVENTORY_DIR}" "${collision_dir}"
+    cat > "${CCTL_INVENTORY_DIR}/acme.tsv" <<EOF
+PROJECT_NAME	acme
+PROJECT_TYPE	moodle
+CLIENT_NAME	acme
+DOMAIN_NAME	acme.example.com
+INSTANCE_DIR	${collision_dir}
+STATUS	installed
+CREATED_AT	2026-01-01T00:00:00-03:00
+UPDATED_AT	2026-01-01T00:00:00-03:00
+EOF
+
+    run _install_write_instance_file
+    assert_success
+    assert_output --partial "falhou o registro"
+    [[ -f ./.cctl-instance ]]
+
+    # o registro antigo (colisao) nao foi sobrescrito
+    run grep -q "${collision_dir}" "${CCTL_INVENTORY_DIR}/acme.tsv"
+    assert_success
 }

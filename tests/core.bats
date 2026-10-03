@@ -72,6 +72,12 @@ teardown() {
     assert_success
 }
 
+@test "core_check_command_context: list permitido em contexto template (F2.4 — le so o inventario)" {
+    CCTL_CONTEXT="template"
+    run core_check_command_context "list"
+    assert_success
+}
+
 @test "core_check_command_context: project so permite install e help" {
     CCTL_CONTEXT="project"
     run core_check_command_context "install"
@@ -86,6 +92,12 @@ teardown() {
     assert_success
 }
 
+@test "core_check_command_context: list permitido em contexto project (F2.4 — le so o inventario)" {
+    CCTL_CONTEXT="project"
+    run core_check_command_context "list"
+    assert_success
+}
+
 @test "core_check_command_context: unknown so permite init e help" {
     CCTL_CONTEXT="unknown"
     run core_check_command_context "help"
@@ -97,6 +109,12 @@ teardown() {
 @test "core_check_command_context: paths permitido em contexto unknown" {
     CCTL_CONTEXT="unknown"
     run core_check_command_context "paths"
+    assert_success
+}
+
+@test "core_check_command_context: list permitido em contexto unknown (F2.4 — le so o inventario)" {
+    CCTL_CONTEXT="unknown"
+    run core_check_command_context "list"
     assert_success
 }
 
