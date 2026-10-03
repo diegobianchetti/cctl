@@ -328,3 +328,188 @@ EOF
     run grep -q "${collision_dir}" "${CCTL_INVENTORY_DIR}/acme.tsv"
     assert_success
 }
+
+# ============================================================
+# cmd_install — pre-flight de sudo antes do pull (passos 7-8)
+# ============================================================
+
+_stub_install_steps_before_preflight() {
+    source_lib validate.sh
+    echo "PROJECT_TYPE=x" > project.conf
+    _install_cleanup_orphan_network() { :; }
+    passwords_generate_all() { :; }
+    _install_allocate_subnet() { return 0; }
+    _install_set_ssl_paths() { return 0; }
+    env_render_all_templates() { :; }
+    env_load() { :; }
+    unset DOMAIN_NAME
+    compose_pull() { echo "pull-chamado" >> "${WORKDIR}/pull.flag"; return 1; }
+}
+
+@test "cmd_install: sudo falhando no pre-flight -> rc 1 e compose_pull NAO e chamado" {
+    _stub_install_steps_before_preflight
+    core_sudo_check() { return 1; }
+
+    run cmd_install < /dev/null
+    assert_failure
+    assert_output --partial "precisa de sudo"
+    [[ ! -e "${WORKDIR}/pull.flag" ]]
+}
+
+@test "cmd_install: sudo ok no pre-flight -> chega ao compose_pull (controle do teste anterior)" {
+    _stub_install_steps_before_preflight
+    core_sudo_check() { return 0; }
+
+    run cmd_install < /dev/null
+    # compose_pull stub retorna 1 para parar o install logo ali
+    assert_failure
+    [[ -s "${WORKDIR}/pull.flag" ]]
+}
+
+# ============================================================
+# _install_ssl / _install_nginx — SSL decidido so por HOST_SSL + SSL_MODE
+# ============================================================
+
+@test "_install_ssl: MOODLE_SSL=false NAO impede a emissao quando HOST_SSL=true e SSL_MODE=self-signed" {
+    export HOST_SSL=true SSL_MODE=self-signed MOODLE_SSL=false HOST_NGINX=false
+    export DOMAIN_NAME="app.example.com"
+    ssl_issue() { echo "ssl_issue:$1" >> "${WORKDIR}/issue.log"; }
+
+    run _install_ssl
+    assert_success
+    [[ "$(cat "${WORKDIR}/issue.log")" == "ssl_issue:app.example.com" ]]
+}
+
+@test "_install_ssl: SSL_MODE=none nao emite certificado" {
+    export HOST_SSL=true SSL_MODE=none MOODLE_SSL=true HOST_NGINX=false
+    export DOMAIN_NAME="app.example.com"
+    ssl_issue() { echo "ssl_issue:$1" >> "${WORKDIR}/issue.log"; }
+
+    run _install_ssl
+    assert_success
+    [[ ! -e "${WORKDIR}/issue.log" ]]
+}
+
+@test "_install_ssl: HOST_SSL=false nao emite certificado" {
+    export HOST_SSL=false SSL_MODE=self-signed HOST_NGINX=false
+    export DOMAIN_NAME="app.example.com"
+    ssl_issue() { echo "ssl_issue:$1" >> "${WORKDIR}/issue.log"; }
+
+    run _install_ssl
+    assert_success
+    [[ ! -e "${WORKDIR}/issue.log" ]]
+}
+
+@test "_install_nginx: MOODLE_SSL=false com HOST_SSL=true e SSL_MODE=self-signed NAO usa o vhost HTTP-only" {
+    export HOST_NGINX=true HOST_SSL=true SSL_MODE=self-signed MOODLE_SSL=false
+    export DOMAIN_NAME="app.example.com"
+    export COMPOSE_PROJECT_NAME="app"
+
+    echo "VHOST-HTTPS-FINAL" > ./nginx/site.conf
+    echo "VHOST-HTTP-ONLY {{DOMAIN_NAME}}" > ./nginx/site-nossl.conf.template
+
+    run _install_nginx
+    assert_success
+
+    grep -q "VHOST-HTTPS-FINAL" ./nginx/site.conf
+    grep -q "VHOST-HTTPS-FINAL" "${NGINX_VHOSTS_DIR}/app.conf"
+    run ! grep -q "VHOST-HTTP-ONLY" "${NGINX_VHOSTS_DIR}/app.conf"
+}
+
+# ============================================================
+# _install_post_hook — erro do hook interrompe o install
+# ============================================================
+
+@test "_install_post_hook: hook que sai com 1 -> rc 1, erro com o rc e sem mensagem de sucesso" {
+    mkdir -p scripts
+    printf '#!/bin/bash\necho hook-rodou > hook.ran\nexit 1\n' > scripts/hook.sh
+    export HOOK_POST_INSTALL="hook.sh"
+
+    run _install_post_hook
+    assert_failure
+    assert_output --partial "Hook post-install falhou (rc=1)"
+    refute_output --partial "Hook post-install executado"
+    [[ -s hook.ran ]]
+}
+
+@test "_install_post_hook: hook que sai com 0 -> rc 0" {
+    mkdir -p scripts
+    printf '#!/bin/bash\necho hook-rodou > hook.ran\nexit 0\n' > scripts/hook.sh
+    export HOOK_POST_INSTALL="hook.sh"
+
+    run _install_post_hook
+    assert_success
+    assert_output --partial "Hook post-install executado"
+    [[ -s hook.ran ]]
+}
+
+@test "_install_post_hook: hook ausente -> rc 0 com aviso (nao interrompe)" {
+    export HOOK_POST_INSTALL="nao-existe.sh"
+
+    run _install_post_hook
+    assert_success
+    assert_output --partial "Hook post-install nao encontrado"
+}
+
+# ============================================================
+# _install_cron — falha do cron_install propaga
+# ============================================================
+
+@test "_install_cron: cron_install falhando -> rc 1" {
+    export HOST_CRON=true
+    cron_install() { return 1; }
+    run _install_cron
+    assert_failure
+}
+
+# ============================================================
+# cmd_install — falha de cron/hook interrompe e NAO grava .cctl-instance
+# ============================================================
+
+_stub_install_steps_after_preflight() {
+    _stub_install_steps_before_preflight
+    core_sudo_check() { return 0; }
+    compose_pull() { return 0; }
+    _install_build_if_needed() { :; }
+    compose_up() { :; }
+    _install_ssl() { :; }
+    _install_nginx() { return 0; }
+}
+
+@test "cmd_install: hook post-install falhando -> rc != 0 e .cctl-instance NAO e gravado" {
+    _stub_install_steps_after_preflight
+    mkdir -p scripts
+    printf '#!/bin/bash\nexit 1\n' > scripts/hook.sh
+    export HOOK_POST_INSTALL="hook.sh" HOST_CRON=false
+
+    run cmd_install < /dev/null
+    assert_failure
+    assert_output --partial "Hook post-install falhou"
+    [[ ! -e ./.cctl-instance ]]
+}
+
+@test "cmd_install: cron falhando -> rc != 0, hook NAO roda e .cctl-instance NAO e gravado" {
+    _stub_install_steps_after_preflight
+    mkdir -p scripts
+    printf '#!/bin/bash\necho rodou > hook.ran\n' > scripts/hook.sh
+    export HOOK_POST_INSTALL="hook.sh" HOST_CRON=true
+    cron_install() { return 1; }
+
+    run cmd_install < /dev/null
+    assert_failure
+    [[ ! -e ./.cctl-instance ]]
+    [[ ! -e hook.ran ]]
+}
+
+@test "cmd_install: cron e hook ok -> rc 0 e .cctl-instance gravado (controle)" {
+    _stub_install_steps_after_preflight
+    mkdir -p scripts
+    printf '#!/bin/bash\nexit 0\n' > scripts/hook.sh
+    export HOOK_POST_INSTALL="hook.sh" HOST_CRON=true
+    export PROJECT_TYPE=x CLIENT_NAME=c DOMAIN_NAME=app.example.com COMPOSE_PROJECT_NAME=app CCTL_VERSION=0
+    cron_install() { return 0; }
+
+    run cmd_install < /dev/null
+    assert_success
+    [[ -e ./.cctl-instance ]]
+}

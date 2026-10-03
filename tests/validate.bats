@@ -5,7 +5,9 @@ setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh validate.sh
+    source_lib colors.sh log.sh core.sh validate.sh
+    # sudo funcional por padrao; testes especificos sobrescrevem
+    core_sudo_check() { return 0; }
 }
 
 teardown() {
@@ -281,4 +283,40 @@ teardown() {
     unset SSL_MODE
     run validate_preflight_install
     assert_failure
+}
+
+# --- validate_sudo / pre-flight de sudo ---------------------------------
+
+@test "validate_sudo: sudo funcionando -> rc 0 e silencioso" {
+    run validate_sudo
+    assert_success
+    assert_output ""
+}
+
+@test "validate_sudo: sem terminal e sudo falhando -> rc 1 com instrucao acionavel" {
+    core_sudo_check() { return 1; }
+    run validate_sudo < /dev/null
+    assert_failure
+    assert_output --partial "precisa de sudo"
+    assert_output --partial "terminal interativo"
+    assert_output --partial "sudo sem senha"
+}
+
+@test "validate_preflight_install: sudo falhando -> rc 1 e mensagem acionavel, mesmo com docker e DNS ok" {
+    mock_cmd docker 'exit 0'
+    unset DOMAIN_NAME
+    core_sudo_check() { return 1; }
+    run validate_preflight_install < /dev/null
+    assert_failure
+    assert_output --partial "precisa de sudo"
+    assert_output --partial "1 verificacao(oes) falharam"
+}
+
+@test "validate_preflight_install: sudo ok -> mostra o item sudo como aprovado" {
+    mock_cmd docker 'exit 0'
+    unset DOMAIN_NAME
+    run validate_preflight_install
+    assert_success
+    # linha de sucesso especifica do sudo (msg_success "sudo")
+    assert_line "[OK] sudo"
 }

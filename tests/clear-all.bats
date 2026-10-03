@@ -21,7 +21,7 @@ setup() {
     unset COMPOSE_FILES DOMAIN_NAME 2>/dev/null || true
 
     mock_sudo_passthrough "${WORKDIR}/sudo.log"
-    mock_crontab "${WORKDIR}/crontab.store"
+    mock_crontab_forbidden "${WORKDIR}/crontab.calls"
     export CRON_DIR="${WORKDIR}/cron.d"
     export LOGROTATE_DIR="${WORKDIR}/logrotate.d"
     mkdir -p "${CRON_DIR}" "${LOGROTATE_DIR}"

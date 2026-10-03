@@ -106,15 +106,19 @@ core_priv_run() {
     sudo "$@"
 }
 
-# core_sudo_usable — sonda se sudo esta disponivel de forma nao-interativa
-# (sudo -n true), sem executar nenhuma operacao real. Para chamadores que
-# precisam decidir ANTES de chamar core_priv_run se ha um caminho
-# privilegiado viavel — ex: lib/cron.sh, para decidir o fallback de crontab
-# de usuario sem arriscar um prompt de senha preso num terminal
-# interativo. Mantem o unico ponto de contato direto com o binario "sudo"
-# concentrado neste arquivo.
-core_sudo_usable() {
-    sudo -n true 2>/dev/null
+# core_sudo_check — confere se o sudo funciona nesta sessao, sem executar
+# nenhuma operacao real. Com terminal (stdin TTY) usa "sudo -v", que pode
+# pedir a senha uma vez e a deixa em cache para as proximas chamadas; sem
+# terminal usa "sudo -n true", que falha se exigir senha. Mantem o unico
+# ponto de contato direto com o binario "sudo" concentrado neste arquivo.
+core_sudo_check() {
+    # root nao precisa de sudo (e o host pode nem ter o pacote sudo)
+    [[ ${EUID} -eq 0 ]] && return 0
+    if [[ -t 0 ]]; then
+        sudo -v
+    else
+        sudo -n true 2>/dev/null
+    fi
 }
 
 # Carrega todas as libs

@@ -34,10 +34,9 @@ if [[ -z "${COMPOSE_PROJECT_NAME:-}" ]]; then
     exit 1
 fi
 
-# Instala logrotate para logs do Apache. Raiz-only (sem fallback de
-# crontab de usuario como lib/cron.sh) — se o destino nao for gravavel e nao
-# houver privilegio de root disponivel, apenas avisa: o arquivo gerado no
-# projeto (./cron/logrotate-apache) fica disponivel para instalacao manual.
+# Instala logrotate para logs do Apache. Se nao conseguir instalar, retorna 1
+# (o install falha); a mensagem traz o comando manual, e o arquivo gerado no
+# projeto (./cron/logrotate-apache) continua disponivel.
 _install_logrotate() {
     local logrotate_src="./cron/logrotate-apache"
     local logrotate_dst="${LOGROTATE_DIR}/rotate-apache-logs-${COMPOSE_PROJECT_NAME}"
@@ -47,7 +46,8 @@ _install_logrotate() {
     if core_priv_run install -m 644 "${logrotate_src}" "${logrotate_dst}"; then
         echo "[post-install] Logrotate instalado: ${logrotate_dst}"
     else
-        echo "[post-install] AVISO: sem privilegio para instalar logrotate em ${logrotate_dst}. Instale manualmente como root: cp ${logrotate_src} ${logrotate_dst} && chmod 644 ${logrotate_dst}" >&2
+        echo "[post-install] ERRO: nao foi possivel instalar o logrotate em ${logrotate_dst}. Instale manualmente como root: cp ${logrotate_src} ${logrotate_dst} && chmod 644 ${logrotate_dst}" >&2
+        return 1
     fi
 }
 

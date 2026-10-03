@@ -198,11 +198,32 @@ validate_git() {
     return 0
 }
 
+# Verifica se o sudo funciona (o cctl exige sudo). Diz ao usuario o que fazer
+# quando nao funciona.
+validate_sudo() {
+    if core_sudo_check; then
+        return 0
+    fi
+
+    if [[ -t 0 ]]; then
+        log_error "O sudo falhou para o usuario $(whoami) (senha errada ou usuario sem permissao de sudo). O cctl exige sudo — veja Requisitos no README."
+    else
+        log_error "O cctl precisa de sudo e nao conseguiu usa-lo sem senha nesta sessao. Rode o comando num terminal interativo (o sudo vai pedir sua senha) ou configure sudo sem senha para este usuario."
+    fi
+    return 1
+}
+
 # Executa todos os pre-flight checks para install
 validate_preflight_install() {
     local errors=0
 
     msg_header "Verificacoes pre-instalacao"
+
+    if validate_sudo; then
+        msg_success "sudo"
+    else
+        ((errors++))
+    fi
 
     if validate_docker; then
         msg_success "Docker"

@@ -159,3 +159,36 @@ EOF
     core_parse_global_args --help
     assert_equal "${CCTL_COMMAND}" "help"
 }
+
+# --- core_sudo_check -----------------------------------------------------
+
+@test "core_sudo_check: sem terminal usa 'sudo -n true' (nunca pede senha) e propaga sucesso" {
+    setup_mock_bin
+    mock_sudo_passthrough "${BATS_TEST_TMPDIR}/sudo.log"
+    run core_sudo_check < /dev/null
+    assert_success
+    run cat "${BATS_TEST_TMPDIR}/sudo.log"
+    assert_output "sudo-called: -n true"
+    teardown_mock_bin
+}
+
+@test "core_sudo_check: sem terminal e sudo exigindo senha -> rc != 0" {
+    setup_mock_bin
+    mock_sudo_deny "${BATS_TEST_TMPDIR}/sudo.log"
+    run core_sudo_check < /dev/null
+    assert_failure
+    run cat "${BATS_TEST_TMPDIR}/sudo.log"
+    assert_output "sudo-called: -n true"
+    teardown_mock_bin
+}
+
+@test "core_sudo_check: como root (EUID 0 real, via user namespace) retorna 0 sem chamar sudo" {
+    command -v unshare >/dev/null || skip "unshare indisponivel"
+    unshare -Ur true 2>/dev/null || skip "user namespace nao permitido neste host"
+    setup_mock_bin
+    mock_sudo_deny "${BATS_TEST_TMPDIR}/sudo.log"
+    run unshare -Ur bash -c 'source "$1/lib/core.sh"; core_sudo_check' _ "${CCTL_ROOT}" < /dev/null
+    assert_success
+    [[ ! -s "${BATS_TEST_TMPDIR}/sudo.log" ]]
+    teardown_mock_bin
+}

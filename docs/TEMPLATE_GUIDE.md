@@ -224,8 +224,16 @@ server {
 
 ## Arquivo opcional: `nginx/site-nossl.conf.template`
 
-Vhost HTTP-only, usado quando `MOODLE_SSL=false` (ou equivalente no template).
-Útil para ambientes de lab e desenvolvimento sem certificado SSL real.
+Vhost HTTP-only, usado quando o `project.conf` tem `SSL_MODE="none"` ou
+`HOST_SSL=false`. Útil para ambientes de lab e desenvolvimento sem certificado
+SSL real.
+
+> **Nota para quem escreve um template:** o `cctl` decide sozinho só pelo
+> `SSL_MODE` e pelo `HOST_SSL`; ele não lê variáveis do seu projeto. Se a
+> aplicação precisa saber se está atrás de https (como o Moodle), exponha uma
+> variável no `.env` do template (o Moodle usa `MOODLE_SSL`) e documente que ela
+> tem de combinar com o `SSL_MODE`: sem certificado (`SSL_MODE="none"` ou
+> `HOST_SSL=false`) a variável fica em `false`; com certificado, em `true`.
 
 ```nginx
 server {
@@ -243,7 +251,14 @@ server {
 ## Arquivo opcional: `scripts/post-install.sh`
 
 Executado ao final do `cctl install` se `HOOK_POST_INSTALL` estiver definido.
-Roda no contexto do diretório da instância com o `.env` já carregado.
+Roda no diretório da instância, num `bash` novo: não herda funções do `cctl`,
+só as variáveis exportadas — as do `project.conf`, as do `.env` da instância e
+`CCTL_ROOT`. Se precisar de funções do `cctl`, faça `source` das libs no próprio
+script (o hook do template moodle faz isso).
+
+> **Se o hook terminar com erro (código diferente de 0), o `cctl install`
+> falha** e para ali. Faça o script sair com código 0 só quando tudo deu certo;
+> se um passo for opcional, trate o erro dentro do script.
 
 ```bash
 #!/bin/bash
@@ -252,7 +267,8 @@ Roda no contexto do diretório da instância com o `.env` já carregado.
 # Aguarda GitLab inicializar (pode demorar ~2 minutos)
 echo "Aguardando GitLab inicializar..."
 timeout 180 bash -c \
-    "until docker exec ${COMPOSE_PROJECT_NAME}_gitlab_1 gitlab-rake gitlab:check SANITIZE=true &>/dev/null; do sleep 10; done"
+    "until docker exec ${COMPOSE_PROJECT_NAME}_gitlab_1 gitlab-rake gitlab:check SANITIZE=true &>/dev/null; do sleep 10; done" \
+    || { echo "GitLab nao subiu a tempo" >&2; exit 1; }
 
 echo "GitLab inicializado."
 ```
