@@ -1,47 +1,53 @@
 #!/bin/bash
-# commands/list.sh — Lista instancias instaladas no servidor
+# commands/list.sh — Lista instancias registradas no inventario do cctl
+#
+# F2.4 (R4): antes, varria CCTL_INSTANCE_BASE_DIR/* procurando
+# .cctl-instance — nao via instancias com --dest fora da base, e nao
+# distinguia "prepared" (so `cctl init`) de "installed". Agora le
+# EXCLUSIVAMENTE o inventario (lib/inventory.sh:inventory_list), nunca o
+# disco direto.
 
 cmd_list() {
-    local base_dir="${CCTL_INSTANCE_BASE_DIR}"
-
-    msg_header "Instancias cctl instaladas em ${base_dir}"
+    msg_header "Instancias cctl registradas"
     echo ""
 
-    if [[ ! -d "${base_dir}" ]]; then
-        msg_warn "Diretorio ${base_dir} nao encontrado."
+    if [[ ! -d "${CCTL_INVENTORY_DIR}" ]]; then
+        msg_warn "Inventario vazio (${CCTL_INVENTORY_DIR} nao existe)."
+        msg_info "Use 'cctl init' para registrar um novo projeto."
         return 0
     fi
 
-    local found=0
-    local dir
-    for dir in "${base_dir}"/*/; do
-        local instance_file="${dir}.cctl-instance"
-        [[ -f "${instance_file}" ]] || continue
+    local found=0 warned=0
+    # created/updated: lidos por posicao (formato TSV de inventory_list),
+    # nao exibidos nesta tabela — shellcheck disable=SC2034 abaixo.
+    local name type client domain instance_dir status state created updated
 
+    # shellcheck disable=SC2034
+    while IFS=$'\t' read -r name type client domain instance_dir status state created updated; do
+        [[ -n "${name}" ]] || continue
         found=$((found + 1))
 
-        # Le metadados
-        local inst_project="" inst_client="" inst_domain="" inst_created=""
-        while IFS= read -r line; do
-            case "${line}" in
-                PROJECT_TYPE=*)  inst_project="${line#*=}" ; inst_project="${inst_project//\"/}" ;;
-                CLIENT_NAME=*)   inst_client="${line#*=}"  ; inst_client="${inst_client//\"/}" ;;
-                DOMAIN_NAME=*)   inst_domain="${line#*=}"  ; inst_domain="${inst_domain//\"/}" ;;
-                CREATED_AT=*)    inst_created="${line#*=}"  ; inst_created="${inst_created//\"/}" ;;
-            esac
-        done < "${instance_file}"
+        local state_label
+        case "${state}" in
+            ok)        state_label="${GREEN}${status}${RESET}" ;;
+            stale)     state_label="${YELLOW}${status} (stale)${RESET}"; warned=$((warned + 1)) ;;
+            corrupted) state_label="${RED}corrompido${RESET}"; warned=$((warned + 1)) ;;
+            *)         state_label="${status}" ;;
+        esac
 
-        local dir_name
-        dir_name=$(basename "${dir}")
+        printf "  ${CYAN}%-25s${RESET}  %-10s  %-15s  %-35s  %b\n" \
+            "${name}" "${type}" "${client}" "${domain}" "${state_label}"
+        printf "    ${DIM}%s${RESET}\n" "${instance_dir}"
+    done < <(inventory_list)
 
-        printf "  ${CYAN}%-25s${RESET}  %-10s  %-15s  %-35s  ${DIM}%s${RESET}\n" \
-            "${dir_name}" "${inst_project}" "${inst_client}" "${inst_domain}" "${inst_created}"
-    done
-
+    echo ""
     if [[ ${found} -eq 0 ]]; then
-        echo "  Nenhuma instancia encontrada."
+        echo "  Nenhuma instancia registrada."
     else
-        echo ""
-        echo "  Total: ${found} instancia(s)"
+        if [[ ${warned} -gt 0 ]]; then
+            echo "  Total: ${found} registro(s), ${warned} com aviso (ver mensagens acima)"
+        else
+            echo "  Total: ${found} registro(s)"
+        fi
     fi
 }

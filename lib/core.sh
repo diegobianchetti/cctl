@@ -5,10 +5,10 @@
 # Versao do cctl
 CCTL_VERSION="0.1.0"
 
-# core_priv_run — executa rm/cp/install/mkdir/cat com sudo somente quando necessario.
+# core_priv_run — executa rm/cp/install/mkdir/cat/mv com sudo somente quando necessario.
 #
 # Contrato de argumentos: core_priv_run <op> [flags/args...] <target>
-#   - <op> e sempre o primeiro argumento: rm, cp, install, mkdir ou cat.
+#   - <op> e sempre o primeiro argumento: rm, cp, install, mkdir, cat ou mv.
 #   - o TARGET/DESTINO e sempre o ULTIMO argumento da chamada (padrao de
 #     cp/install/mkdir/rm — o caminho que sera efetivamente criado/alterado).
 #   - para cp/install, a ORIGEM e o ultimo argumento nao-flag antes do
@@ -27,6 +27,12 @@ CCTL_VERSION="0.1.0"
 #   cat      : verifica apenas LEITURA do target (unico argumento) — usado
 #              para ler arquivos restritos (ex. chave privada 0600 de root)
 #              sem copiar/mover nada.
+#   mv       : rename atomico (lib/inventory.sh) — a origem e sempre um
+#              temp-file de propriedade do usuario atual (criado por quem
+#              chama core_priv_run), entao so o diretorio do DESTINO
+#              importa: igual a "rm", testa a gravabilidade de
+#              "dirname $target" (rename(2) exige escrita no diretorio, nao
+#              no arquivo que sera substituido).
 #
 # Se alguma checagem indicar necessidade de privilegio, tenta `sudo -n`
 # quando stdin nao e um terminal (ambiente nao-interativo); se falhar,
@@ -72,6 +78,11 @@ core_priv_run() {
             ;;
         cat)
             [[ -r "${target}" ]] || need_sudo=true
+            ;;
+        mv)
+            local mv_dir
+            mv_dir="$(dirname -- "${target}")"
+            [[ -w "${mv_dir}" ]] || need_sudo=true
             ;;
         *)
             log_error "core_priv_run: operacao nao suportada: ${op}"
@@ -121,6 +132,7 @@ core_bootstrap() {
     source "${lib_dir}/log.sh"
     source "${lib_dir}/env.sh"
     source "${lib_dir}/validate.sh"
+    source "${lib_dir}/inventory.sh"
     source "${lib_dir}/network.sh"
     source "${lib_dir}/compose.sh"
     source "${lib_dir}/registry.sh"
@@ -161,10 +173,12 @@ core_check_command_context() {
             return 0
             ;;
         template)
-            # Repo de templates: apenas init, help, proxy e paths (gerenciamento
-            # global — paths e diagnostico, mesmo motivo de proxy estar aqui)
+            # Repo de templates: apenas init, help, proxy, paths e list
+            # (gerenciamento global — list le so o inventario, nao precisa
+            # de instancia/projeto no diretorio atual; mesmo motivo de
+            # proxy/paths estarem aqui)
             case "${cmd}" in
-                init|help|proxy|paths) return 0 ;;
+                init|help|proxy|paths|list) return 0 ;;
                 *)
                     msg_error "Comando '${cmd}' requer uma instancia instalada."
                     msg_info "Use 'cctl init' para criar uma nova instancia ou acesse o diretorio de uma instancia existente."
@@ -173,11 +187,11 @@ core_check_command_context() {
             esac
             ;;
         project)
-            # Diretorio de projeto pre-install: install, ssl, help, proxy e
-            # paths (gerenciamento global — paths e diagnostico, mesmo motivo
-            # de proxy estar aqui)
+            # Diretorio de projeto pre-install: install, ssl, help, proxy,
+            # paths e list (gerenciamento global — mesmo motivo de
+            # proxy/paths estarem aqui)
             case "${cmd}" in
-                install|ssl|help|proxy|paths) return 0 ;;
+                install|ssl|help|proxy|paths|list) return 0 ;;
                 *)
                     msg_error "Comando '${cmd}' nao disponivel. Esta instancia ainda nao foi instalada."
                     msg_info "Execute 'cctl install' para instalar."
@@ -186,9 +200,10 @@ core_check_command_context() {
             esac
             ;;
         *)
-            # Contexto desconhecido: apenas init, help, proxy e paths (gerenciamento global)
+            # Contexto desconhecido: apenas init, help, proxy, paths e list
+            # (gerenciamento global)
             case "${cmd}" in
-                init|help|proxy|paths) return 0 ;;
+                init|help|proxy|paths|list) return 0 ;;
                 *)
                     msg_error "Diretorio atual nao e um contexto valido do cctl."
                     msg_info "Use 'cctl init' para criar um novo projeto ou acesse o diretorio de uma instancia instalada."

@@ -36,6 +36,11 @@ cmd_destroy() {
         # (instancia dentro do $HOME), onde `sudo rm -rf` falharia.
         if core_priv_run rm -rf "${instance_dir}"; then
             log_success "Diretorio ${instance_dir} removido"
+            # So remove o registro do inventario DEPOIS do diretorio ter
+            # sumido de fato (F2.4) — se a remocao do diretorio falhar, o
+            # registro fica, e a instancia continua aparecendo em
+            # "cctl list" (correto: ela ainda existe no disco).
+            inventory_remove "${project_name}"
         else
             log_warn "Nao foi possivel remover ${instance_dir} — remova manualmente"
         fi

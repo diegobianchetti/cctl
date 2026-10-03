@@ -166,6 +166,22 @@ cmd_init() {
         log_debug "Vhost pulado (sem dominio informado)"
     fi
 
+    # 4. Registra no inventario (F2.4) — somente apos o init ter tido
+    # sucesso ate aqui. CLIENT_NAME segue a mesma convencao de
+    # _init_render_placeholders (CLIENT_NAME = project_name); PROJECT_TYPE
+    # vem do manifest ja renderizado, que pode ser fixo no template (ex.
+    # moodle) e nao necessariamente igual a template_type.
+    local inv_project_type inv_dest_abs
+    inv_project_type=$( (source "${dest_dir}/project.conf" 2>/dev/null; printf '%s' "${PROJECT_TYPE:-${template_type}}") )
+    # INSTANCE_DIR do inventario e sempre absoluto (dest_dir pode ter sido
+    # informado relativo via --dest ou pela opcao 3 do prompt interativo).
+    inv_dest_abs="$(cd "${dest_dir}" && pwd)" || inv_dest_abs="${dest_dir}"
+
+    if ! inventory_mark_prepared "${project_name}" "${inv_project_type}" "${project_name}" "${domain_name}" "${inv_dest_abs}"; then
+        msg_error "Projeto criado em ${dest_dir}, mas falhou o registro no inventario."
+        return 1
+    fi
+
     echo ""
     msg_header "Projeto inicializado!"
     echo ""

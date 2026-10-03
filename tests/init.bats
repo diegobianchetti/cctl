@@ -4,7 +4,7 @@
 setup() {
     load 'helpers/common'
     load_bats_libs
-    source_lib colors.sh log.sh validate.sh
+    source_lib colors.sh log.sh validate.sh core.sh inventory.sh
 
     WORKDIR="$(make_tmp_workdir)"
     cd "${WORKDIR}" || return 1
@@ -12,6 +12,10 @@ setup() {
     # CCTL_ROOT isolado com um template minimo, sem tocar no projeto real
     export CCTL_ROOT="${WORKDIR}/cctl-root"
     mkdir -p "${CCTL_ROOT}/templates/minimal/docker" "${CCTL_ROOT}/templates/minimal/nginx"
+
+    # Inventario isolado dentro do WORKDIR (gravavel sem sudo) — F2.4:
+    # cmd_init registra "prepared" no final de um init bem-sucedido.
+    export CCTL_INVENTORY_DIR="${WORKDIR}/inventory"
 
     cat > "${CCTL_ROOT}/templates/minimal/project.conf" <<'EOF'
 ENV_FILE="docker/.env"

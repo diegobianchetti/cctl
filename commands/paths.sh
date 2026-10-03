@@ -17,6 +17,7 @@ cmd_paths() {
 
     local -a _paths_derived=(
         "CCTL_INSTANCE_BASE_DIR"
+        "CCTL_INVENTORY_DIR"
         "NGINX_VHOSTS_DIR"
         "LETSENCRYPT_DIR"
         "LETSENCRYPT_LIVE_DIR"
