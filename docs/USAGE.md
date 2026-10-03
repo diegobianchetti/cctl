@@ -29,9 +29,15 @@ Unifica o gerenciamento de projetos DSpace e Moodle.
   (fica root-owned de propósito — guarda chave privada) e para os arquivos
   fixos de `/etc/cron.d`/`/etc/logrotate.d` — depois do `cctl proxy up`
   inicial (que ajusta o dono da árvore para o usuário que o invocou), o dia a
-  dia (`install`, `up`, `backup`, `rollout`) não pede senha. **`certbot` não
+  dia (`up`, `backup`, `rollout`) não pede senha. O `install` é a exceção:
+  confere o sudo no começo e, em terminal, pode pedir a senha ali. **`certbot` não
   é requisito do host** — a emissão/renovação roda dentro do container
   `nginx-proxy` via `docker exec`.
+  O `cctl install` **verifica o sudo no começo** e para antes de baixar
+  qualquer imagem se ele não funcionar. Em terminal interativo o sudo pede a
+  senha uma vez. Sem terminal (automação, CI) o usuário precisa de sudo sem
+  senha (NOPASSWD) de verdade: não basta o sudo ter funcionado há pouco, porque
+  a credencial em cache expira.
 - Acesso ao registry configurado em `DOCKER_OWNER` para pull das imagens
 
 ### Layout no host
@@ -126,7 +132,7 @@ O que acontece (a ordem e a dos passos numerados em `commands/install.sh`):
 3. Aloca subnet Docker livre no range configurado
 4. Renderiza templates (nginx, cron) com as variaveis do `.env`
 5. Recarrega o `.env` com as senhas e a subnet ja geradas
-6. Valida pre-requisitos: **docker, espaco em disco e DNS do `DOMAIN_NAME`**
+6. Valida pre-requisitos: **sudo, docker, espaco em disco e DNS do `DOMAIN_NAME`**
    (dominios `localhost`, `*.local` e `*.test` sao pulados; um dominio que
    nao resolva — nem por DNS nem por `/etc/hosts` — **aborta o install**)
 7. Pull das imagens do registry
@@ -137,6 +143,30 @@ O que acontece (a ordem e a dos passos numerados em `commands/install.sh`):
 12. Instala cron jobs (se `HOST_CRON=true`)
 13. Executa hook pos-instalacao
 14. Grava `.cctl-instance` (marca como instalado)
+
+> **Falha de cron, logrotate ou hook interrompe o install.** Antes, esses tres
+> passos so geravam um aviso e o install seguia. Agora, se o cron job nao puder
+> ser instalado em `/etc/cron.d`, se o logrotate nao puder ser instalado, ou se o
+> hook pos-instalacao terminar com erro, o `cctl install` para e mostra a causa.
+> Se isso acontecer depois que os containers ja subiram (passo 9), a instalacao
+> fica pela metade.
+>
+> **Como fica a instalacao pela metade.** Os containers continuam rodando e o
+> site ja esta publicado no nginx-proxy, mas o arquivo `.cctl-instance` nao foi
+> gravado. Por isso o `cctl` ainda trata o diretorio como "nao instalado":
+> `cctl down`, `cctl status`, `cctl clear-all` e `cctl destroy` recusam rodar.
+>
+> **Como recuperar.** Corrija a causa e rode `cctl install` de novo no mesmo
+> diretorio. As senhas ja geradas sao mantidas e os volumes (dados) tambem.
+> Mas o install recria os containers (a rede do projeto pode ganhar outra
+> subnet), entao **espere a aplicacao terminar de iniciar antes de rodar de
+> novo**. Aplicacoes como o Moodle fazem a instalacao inicial em segundo plano,
+> depois que o container sobe; se os containers forem recriados no meio disso,
+> a instalacao da aplicacao fica incompleta. Para acompanhar:
+>
+> ```bash
+> docker logs -f <projeto>-moodle-app   # no Moodle: espere "Servidor Web iniciado!"
+> ```
 
 > **SSL vem antes do nginx, de proposito:** o vhost final so e testado com
 > `nginx -t` depois que o certificado existe. Quando o modo e `letsencrypt` e o

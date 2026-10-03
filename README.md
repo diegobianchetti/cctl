@@ -39,7 +39,10 @@ embutido no README).
 - **`sudo`** — requisito, não opcional: o `cctl` roda como usuário comum,
   mas exige permissão de sudo (raiz de dados na primeira vez, escrita em
   `LETSENCRYPT_DIR` — que fica root-owned de propósito — e arquivos fixos de
-  `/etc/cron.d`/`/etc/logrotate.d`). **`certbot` não precisa estar instalado
+  `/etc/cron.d`/`/etc/logrotate.d`). O `cctl install` **verifica o sudo logo no
+  começo** e para, com uma mensagem dizendo o que fazer, se ele não funcionar
+  (sem terminal — automação, CI — é preciso sudo sem senha, NOPASSWD, de verdade: a senha em cache expira).
+  **`certbot` não precisa estar instalado
   no host** — roda dentro do container `nginx-proxy` (`docker exec`).
 - [nginx-proxy](https://github.com/diegobianchetti/nginx-proxy) em execução
   (necessário para `cctl install`)
@@ -242,9 +245,15 @@ Responda aos prompts: opção `1` cria no diretório atual, e informe um domíni
 
 ```bash
 cd moodle-acme
-vi docker/.env        # revise MOODLE_SSL=false se não houver certificado real
+vi project.conf       # lab sem certificado: SSL_MODE="none" (ou HOST_SSL=false)
+vi docker/.env        # lab sem certificado: MOODLE_SSL=false
 cctl install
 ```
+
+Sem certificado real, os **dois** ajustes são necessários: `SSL_MODE="none"` (ou
+`HOST_SSL=false`) faz o `cctl` publicar o site em HTTP, e `MOODLE_SSL=false` avisa o Moodle de que o
+endereço é `http://`. O Moodle grava esse endereço na primeira instalação; se os
+dois não combinarem, o site abre sem estilo (CSS) e corrigir depois dá trabalho.
 
 ### 6. Validar o acesso
 

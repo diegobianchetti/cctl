@@ -1,15 +1,14 @@
 #!/usr/bin/env bats
 # tests/cron.bats — testes para lib/cron.sh
 #
-# Cobre: instalacao via CRON_DIR (core_priv_run, sem sudo quando gravavel),
-# fallback para a crontab do usuario quando CRON_DIR nao e gravavel e nao ha
-# sudo, idempotencia do fallback, remocao nos dois lugares, e a regressao de
-# colisao por substring (cron_list/cron_remove nao podem casar "moodle-lab"
-# quando o projeto e "moodle").
+# Cobre: instalacao dos jobs em CRON_DIR (via core_priv_run), falha quando a
+# instalacao nao e possivel (cron_install retorna 1 e nao tenta crontab de
+# usuario), remocao/listagem so em CRON_DIR, e a regressao de colisao por
+# substring (cron_list/cron_remove nao podem casar "moodle-lab" quando o
+# projeto e "moodle").
 #
-# Isolamento: sudo e crontab sempre mockados via bin/ temporario no PATH e
-# arquivo de estado local — nenhuma crontab real, /etc/cron.d real ou o host
-# sao tocados.
+# Isolamento: sudo e crontab sempre mockados via bin/ temporario no PATH —
+# nenhuma crontab real, /etc/cron.d real ou o host sao tocados.
 
 setup() {
     load 'helpers/common'
@@ -41,9 +40,9 @@ teardown() {
     true
 }
 
-@test "cron_install: CRON_DIR gravavel instala sem chamar sudo" {
+@test "cron_install: CRON_DIR gravavel instala o job com modo 644, sem chamar sudo nem crontab" {
     mock_sudo_passthrough "${WORKDIR}/sudo.log"
-    mock_crontab "${WORKDIR}/crontab.store"
+    mock_crontab_forbidden "${WORKDIR}/crontab.calls"
 
     run cron_install
     assert_success
@@ -51,91 +50,79 @@ teardown() {
     local dest="${CRON_DIR}/exec-cron-moodle-moodle"
     [[ -f "${dest}" ]]
     assert_output --partial "Cron instalado: ${dest}"
+    # conteudo copiado de verdade e modo 644
+    cmp -s ./cron/exec-cron-moodle.cron "${dest}"
+    [[ "$(stat -c '%a' "${dest}")" == "644" ]]
 
     # sudo nao deve ter sido chamado (CRON_DIR ja era gravavel)
     [[ ! -s "${WORKDIR}/sudo.log" ]]
+    [[ ! -s "${WORKDIR}/crontab.calls" ]]
 }
 
-@test "cron_install: CRON_DIR nao gravavel e sem sudo cai na crontab do usuario, sem campo de usuario" {
-    chmod -w "${CRON_DIR}"
-    mock_sudo_deny "${WORKDIR}/sudo.log"
-    mock_crontab "${WORKDIR}/crontab.store"
+@test "cron_install: core_priv_run falhando -> rc 1, erro acionavel e nenhuma chamada a crontab" {
+    mock_crontab_forbidden "${WORKDIR}/crontab.calls"
+    core_priv_run() { return 1; }
 
     run cron_install
-    assert_success
-    assert_output --partial "crontab do usuario"
+    assert_failure
+    assert_output --partial "NAO foi agendado"
+    assert_output --partial "${CRON_DIR}/exec-cron-moodle-moodle"
+    refute_output --partial "Cron instalado"
 
-    run cat "${WORKDIR}/crontab.store"
-    assert_success
-    assert_output --partial "# cctl:begin:moodle:exec-cron-moodle"
-    assert_output --partial "# cctl:end:moodle:exec-cron-moodle"
-    # Sem o campo de usuario ("root"): a linha de job vai direto de "* * * * *"
-    # para o comando.
-    assert_output --partial '* * * * * /usr/bin/docker compose -p moodle exec moodle-app bash -c "/usr/local/bin/cron-moodle.sh"'
-    refute_output --partial '* * * * * root'
-
-    # nada deve ter sido escrito em CRON_DIR (permanece so o dir vazio)
-    chmod +w "${CRON_DIR}"
-    run bash -c "ls -A '${CRON_DIR}'"
-    assert_output ""
+    [[ ! -e "${CRON_DIR}/exec-cron-moodle-moodle" ]]
+    # nao pode ter caido em crontab de usuario
+    [[ ! -s "${WORKDIR}/crontab.calls" ]]
 }
 
-@test "cron_install: reinstalar na crontab do usuario nao duplica (idempotencia)" {
-    chmod -w "${CRON_DIR}"
-    mock_sudo_deny "${WORKDIR}/sudo.log"
-    mock_crontab "${WORKDIR}/crontab.store"
+@test "cron_install: um job falha e outro funciona -> rc 1 (nao reporta sucesso pela metade)" {
+    cat > ./cron/outro.cron <<'EOF'
+0 3 * * * root /bin/true
+EOF
+    # falha so para o job "outro"; os demais sao instalados de verdade
+    core_priv_run() {
+        [[ "$*" == *outro-moodle* ]] && return 1
+        "$@"
+    }
 
     run cron_install
-    assert_success
-    run cron_install
-    assert_success
-
-    run bash -c "grep -c '# cctl:begin:moodle:exec-cron-moodle' '${WORKDIR}/crontab.store'"
-    assert_output "1"
-    run bash -c "grep -c '/usr/local/bin/cron-moodle.sh' '${WORKDIR}/crontab.store'"
-    assert_output "1"
+    assert_failure
+    [[ -f "${CRON_DIR}/exec-cron-moodle-moodle" ]]
+    [[ ! -e "${CRON_DIR}/outro-moodle" ]]
 }
 
-@test "cron_remove: limpa CRON_DIR e a crontab do usuario" {
+@test "cron_remove/cron_list: operam so em CRON_DIR, sem chamar crontab" {
     mock_sudo_passthrough "${WORKDIR}/sudo.log"
-    mock_crontab "${WORKDIR}/crontab.store"
+    mock_crontab_forbidden "${WORKDIR}/crontab.calls"
 
-    # Um arquivo em CRON_DIR (caminho de sistema)...
     cat > "${CRON_DIR}/exec-cron-moodle-moodle" <<'EOF'
 SHELL=/bin/sh
 * * * * * root /bin/true
 EOF
-    # ...e uma entrada na crontab do usuario (caminho de fallback), como se
-    # um segundo job tivesse caido la.
-    cat > "${WORKDIR}/crontab.store" <<'EOF'
-# cctl:begin:moodle:backup-db
-* * * * * /bin/true
-# cctl:end:moodle:backup-db
-EOF
+
+    run cron_list
+    assert_success
+    assert_output --partial "exec-cron-moodle-moodle"
 
     run cron_remove
     assert_success
     assert_output --partial "removido"
-
     [[ ! -f "${CRON_DIR}/exec-cron-moodle-moodle" ]]
-    run cat "${WORKDIR}/crontab.store"
-    refute_output --partial "cctl:begin:moodle:backup-db"
+
+    run cron_list
+    assert_success
+    assert_output --partial "Nenhum cron job encontrado"
+
+    [[ ! -s "${WORKDIR}/crontab.calls" ]]
 }
 
 @test "cron_list/cron_remove (regressao colisao): projeto 'moodle' nao casa 'moodle-lab'" {
     mock_sudo_passthrough "${WORKDIR}/sudo.log"
-    mock_crontab "${WORKDIR}/crontab.store"
 
     cat > "${CRON_DIR}/exec-cron-moodle-moodle" <<'EOF'
 * * * * * root /bin/true
 EOF
     cat > "${CRON_DIR}/exec-cron-moodle-moodle-lab" <<'EOF'
 * * * * * root /bin/true
-EOF
-    cat > "${WORKDIR}/crontab.store" <<'EOF'
-# cctl:begin:moodle-lab:exec-cron-moodle
-* * * * * /bin/true
-# cctl:end:moodle-lab:exec-cron-moodle
 EOF
 
     run cron_list
@@ -148,9 +135,6 @@ EOF
     # Arquivo do outro projeto continua no lugar
     [[ -f "${CRON_DIR}/exec-cron-moodle-moodle-lab" ]]
     [[ ! -f "${CRON_DIR}/exec-cron-moodle-moodle" ]]
-    # Entrada de crontab do outro projeto continua intacta
-    run cat "${WORKDIR}/crontab.store"
-    assert_output --partial "cctl:begin:moodle-lab:exec-cron-moodle"
 }
 
 @test "cron_list/cron_remove (regressao B1, direcao oposta): projeto 'moodle' nao casa 'prod-moodle'" {
@@ -161,7 +145,6 @@ EOF
     # tambem casa "exec-cron-moodle-prod-moodle" — e sob esse glob
     # cron_remove apagaria o cron do projeto errado.
     mock_sudo_passthrough "${WORKDIR}/sudo.log"
-    mock_crontab "${WORKDIR}/crontab.store"
 
     cat > "${CRON_DIR}/exec-cron-moodle-moodle" <<'EOF'
 * * * * * root /bin/true
@@ -183,73 +166,6 @@ EOF
     [[ -f "${CRON_DIR}/exec-cron-moodle-prod-moodle" ]]
 }
 
-@test "_cron_strip_user_block (B2): instalar 'backup-db' nao apaga o bloco de 'backup' (prefixo de marcador)" {
-    mock_crontab "${WORKDIR}/crontab.store"
-
-    mkdir -p ./cron
-    cat > ./cron/backup.cron <<'EOF'
-0 3 * * * root /bin/true backup-principal
-EOF
-    cat > ./cron/backup-db.cron <<'EOF'
-0 4 * * * root /bin/true backup-db-principal
-EOF
-
-    # Ordem importa para expor o bug: instala primeiro o marcador MAIS
-    # LONGO (backup-db) e depois o mais curto (backup, prefixo do anterior).
-    # Com "index($0, b) == 1" o strip de "# cctl:begin:moodle:backup" tambem
-    # casava a linha "# cctl:begin:moodle:backup-db" (comeca com o mesmo
-    # texto), apagando o bloco de backup-db silenciosamente a cada
-    # reinstalacao do "backup".
-    _cron_install_user_crontab "moodle" "backup-db" "./cron/backup-db.cron"
-    _cron_install_user_crontab "moodle" "backup" "./cron/backup.cron"
-
-    run cat "${WORKDIR}/crontab.store"
-    assert_success
-    assert_output --partial "# cctl:begin:moodle:backup-db"
-    assert_output --partial "# cctl:end:moodle:backup-db"
-    assert_output --partial "backup-db-principal"
-    assert_output --partial "# cctl:begin:moodle:backup"
-    assert_output --partial "backup-principal"
-}
-
-@test "_cron_strip_user_block (B2): marcador de abertura sem fechamento correspondente e preservado com aviso" {
-    source_lib cron.sh
-
-    run _cron_strip_user_block "$(printf '%s\n' 'linha-anterior' '# cctl:begin:moodle:backup' 'algo-do-usuario')" "# cctl:begin:moodle:backup"
-    assert_success
-    assert_output --partial "linha-anterior"
-    assert_output --partial "# cctl:begin:moodle:backup"
-    assert_output --partial "algo-do-usuario"
-}
-
-@test "_cron_install_user_crontab (B3a): 'crontab -' falhando nao reporta sucesso" {
-    mock_crontab_write_fails
-
-    mkdir -p ./cron
-    cat > ./cron/backup.cron <<'EOF'
-0 3 * * * root /bin/true
-EOF
-
-    run _cron_install_user_crontab "moodle" "backup" "./cron/backup.cron"
-    assert_failure
-    refute_output --partial "instalado na crontab do usuario"
-    assert_output --partial "Falha ao instalar"
-}
-
-@test "_cron_install_user_crontab (B3a): sem 'crontab' no PATH, nao promete fallback" {
-    mkdir -p ./cron
-    cat > ./cron/backup.cron <<'EOF'
-0 3 * * * root /bin/true
-EOF
-
-    local minimal_bin
-    minimal_bin="$(make_minimal_path_without "${WORKDIR}/minimal-bin" crontab)"
-
-    PATH="${minimal_bin}" run _cron_install_user_crontab "moodle" "backup" "./cron/backup.cron"
-    assert_failure
-    assert_output --partial "NAO foi agendado"
-}
-
 @test "cron_remove (B3b): rm falhando no arquivo de sistema nao conta como removido nem reporta sucesso mentiroso" {
     mock_cmd rm '
         for a in "$@"; do
@@ -257,7 +173,6 @@ EOF
         done
         exec /bin/rm "$@"
     '
-    mock_crontab "${WORKDIR}/crontab.store"
 
     cat > "${CRON_DIR}/exec-cron-moodle-moodle" <<'EOF'
 * * * * * root /bin/true

@@ -80,10 +80,10 @@ cmd_install() {
     _install_nginx || return 1
 
     # 12. Cron
-    _install_cron
+    _install_cron || return 1
 
     # 13. Hook post-install
-    _install_post_hook
+    _install_post_hook || return 1
 
     # 14. Grava .cctl-instance
     _install_write_instance_file
@@ -175,13 +175,14 @@ _install_nginx() {
         network_connect_nginx "${project_network}"
     fi
 
-    # Vhost HTTP-only quando SSL esta desabilitado: SSL_MODE=none, HOST_SSL=false
-    # ou o legado MOODLE_SSL=false. Se existir um template dedicado
+    # Vhost HTTP-only quando SSL esta desabilitado: SSL_MODE=none ou
+    # HOST_SSL!=true (o cctl nao olha variaveis especificas de cada projeto).
+    # Se existir um template dedicado
     # (nginx/site-nossl.conf.template), renderiza-o para nginx/site.conf;
     # senao usa um site-nossl.conf ja renderizado, se houver.
     local nginx_conf="./nginx/site.conf"
     local ssl_disabled=false
-    if [[ "${SSL_MODE:-}" == "none" || "${HOST_SSL:-false}" != "true" || "${MOODLE_SSL:-true}" == "false" ]]; then
+    if [[ "${SSL_MODE:-}" == "none" || "${HOST_SSL:-false}" != "true" ]]; then
         ssl_disabled=true
     fi
 
@@ -201,17 +202,12 @@ _install_nginx() {
     nginx_enable_site "${DOMAIN_NAME}" "${nginx_conf}" || return 1
 }
 
-# Solicita/instala certificado SSL (se HOST_SSL=true, MOODLE_SSL!=false e
-# SSL_MODE!=none). Roda ANTES de _install_nginx (ver cmd_install) para que o
-# certificado ja exista quando o nginx testar a configuracao final.
+# Solicita/instala certificado SSL (se HOST_SSL=true e SSL_MODE!=none).
+# Roda ANTES de _install_nginx (ver cmd_install) para que o certificado ja
+# exista quando o nginx testar a configuracao final.
 _install_ssl() {
     if [[ "${HOST_SSL:-false}" != "true" ]]; then
         log_debug "HOST_SSL desabilitado, pulando SSL"
-        return 0
-    fi
-
-    if [[ "${MOODLE_SSL:-true}" == "false" ]]; then
-        log_debug "MOODLE_SSL=false — pulando SSL"
         return 0
     fi
 
@@ -284,8 +280,8 @@ EOF
 }
 
 # Instala cron entries no host (se HOST_CRON=true) — logica real em
-# lib/cron.sh:cron_install (CRON_DIR + core_priv_run + fallback pra crontab
-# do usuario); aqui so o guard de HOST_CRON e a mensagem de etapa do install.
+# lib/cron.sh:cron_install (CRON_DIR + core_priv_run); aqui so o guard de
+# HOST_CRON e a mensagem de etapa do install. Falha ao instalar propaga rc 1.
 _install_cron() {
     if [[ "${HOST_CRON:-false}" != "true" ]]; then
         log_debug "HOST_CRON desabilitado, pulando cron"
@@ -293,7 +289,7 @@ _install_cron() {
     fi
 
     msg_step "CRON" "Instalando cron jobs..."
-    cron_install
+    cron_install || return 1
 }
 
 # Executa hook post-install (se definido no manifest)
@@ -311,7 +307,12 @@ _install_post_hook() {
 
     msg_step "HOOK" "Executando post-install..."
     chmod +x "${hook_script}"
-    bash "${hook_script}" || log_warn "Hook post-install retornou erro"
+    local hook_rc=0
+    bash "${hook_script}" || hook_rc=$?
+    if [[ ${hook_rc} -ne 0 ]]; then
+        log_error "Hook post-install falhou (rc=${hook_rc}): ${hook_script}"
+        return 1
+    fi
     log_success "Hook post-install executado"
 }
 

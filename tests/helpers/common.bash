@@ -83,8 +83,7 @@ mock_sudo_passthrough() {
 }
 
 # Mocka sudo sempre falhando (simula usuario sem privilegio de root nenhum e
-# sem NOPASSWD configurado) — usado para exercitar o fallback de
-# lib/cron.sh (crontab do usuario) sem tocar sudo/root real.
+# sem NOPASSWD configurado) sem tocar sudo/root real.
 # Uso: mock_sudo_deny [caminho-do-log]  (default: ${WORKDIR}/sudo.log)
 mock_sudo_deny() {
     local logfile="${1:-${WORKDIR}/sudo.log}"
@@ -94,84 +93,17 @@ mock_sudo_deny() {
     '
 }
 
-# Mocka `crontab` com um arquivo local como "crontab do usuario" — nenhuma
-# crontab real do host e lida ou escrita. Suporta os 3 subcomandos usados
-# por lib/cron.sh: "-l" (le, erro se vazia — como o crontab real), "-"
-# (escreve stdin) e "-r" (remove tudo).
-# Uso: mock_crontab [caminho-do-arquivo-de-estado] (default: ${WORKDIR}/crontab.store)
-mock_crontab() {
-    local store="${1:-${WORKDIR}/crontab.store}"
-    : > "${store}"
+# Mocka `crontab` como comando PROIBIDO: qualquer chamada e registrada no
+# arquivo informado e falha. O cctl exige sudo e nunca usa a crontab do
+# usuario — o teste confere que o arquivo continua vazio.
+# Uso: mock_crontab_forbidden [caminho-do-log] (default: ${WORKDIR}/crontab.calls)
+mock_crontab_forbidden() {
+    local logfile="${1:-${WORKDIR}/crontab.calls}"
+    : > "${logfile}"
     mock_cmd crontab '
-        store="'"${store}"'"
-        case "${1:-}" in
-            -l)
-                if [[ -s "${store}" ]]; then
-                    cat "${store}"
-                    exit 0
-                fi
-                echo "no crontab for $(whoami)" >&2
-                exit 1
-                ;;
-            -)
-                cat > "${store}"
-                exit 0
-                ;;
-            -r)
-                : > "${store}"
-                exit 0
-                ;;
-            *)
-                echo "mock crontab: uso nao suportado: $*" >&2
-                exit 1
-                ;;
-        esac
+        echo "crontab-called: $*" >> "'"${logfile}"'"
+        exit 1
     '
-}
-
-# Mocka `crontab` sempre falhando na escrita ("crontab -"), mas respondendo
-# normalmente a "-l" (crontab vazia) — usado para exercitar o caminho de
-# erro de lib/cron.sh:_cron_install_user_crontab (B3a) sem depender de
-# nenhum crontab real.
-# Uso: mock_crontab_write_fails
-mock_crontab_write_fails() {
-    mock_cmd crontab '
-        case "${1:-}" in
-            -l)
-                echo "no crontab for $(whoami)" >&2
-                exit 1
-                ;;
-            -)
-                cat > /dev/null
-                exit 1
-                ;;
-            *)
-                exit 1
-                ;;
-        esac
-    '
-}
-
-# Monta, dentro do diretorio informado, symlinks para um subconjunto minimo
-# de binarios do host e ecoa o caminho — usado para simular ausencia de um
-# comando especifico (ex. "crontab") sem remover o resto do PATH real, que
-# quebraria builtins externos usados pelas libs (awk, sed, basename...). O
-# diretorio informado deve estar sob o WORKDIR do teste para ser limpo no
-# teardown padrao.
-# Uso: PATH="$(make_minimal_path_without "${WORKDIR}/minimal-bin" crontab)" run <comando>
-make_minimal_path_without() {
-    local scratch="$1"
-    local exclude="$2"
-    mkdir -p "${scratch}"
-
-    local c p
-    for c in awk basename dirname cat grep sed whoami printf mkdir date; do
-        [[ "${c}" == "${exclude}" ]] && continue
-        p="$(command -v "${c}" 2>/dev/null)" || continue
-        ln -sf "${p}" "${scratch}/${c}"
-    done
-
-    echo "${scratch}"
 }
 
 # Gera um par chave/certificado autoassinado REAL (RSA 2048, valido por 1
