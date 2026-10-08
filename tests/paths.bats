@@ -6,16 +6,27 @@
 # explicitas), nunca no processo do teste — evita que uma variavel exportada
 # por um teste vaze para os demais.
 
+bats_require_minimum_version 1.5.0
+
 setup() {
     load 'helpers/common'
     load_bats_libs
-    source_lib colors.sh log.sh core.sh
+    source_lib colors.sh log.sh core.sh inventory.sh network.sh
+    setup_mock_bin
 
     WORKDIR="$(make_tmp_workdir)"
     cd "${WORKDIR}" || return 1
+
+    # "cctl paths" tambem consulta o docker (redes) e le o inventario: ambos
+    # isolados no WORKDIR/mocks.
+    export CCTL_INVENTORY_DIR="${WORKDIR}/inventory"
+    mock_sudo_passthrough
+    setup_network_env
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
 }
 
 teardown() {
+    teardown_mock_bin
     [[ -n "${WORKDIR:-}" && -d "${WORKDIR}" ]] && rm -rf "${WORKDIR}"
     true
 }
@@ -153,4 +164,128 @@ _load_paths_cmd() {
     run cmd_paths
     assert_success
     assert_output --partial "nao existe"
+}
+
+# ============================================================
+# cctl paths — rede das instalacoes e divergencias
+# ============================================================
+
+@test "cmd_paths: mostra o range de rede do cctl" {
+    _load_paths_cmd
+    run cmd_paths
+    assert_success
+    assert_output --partial "Rede das instalacoes"
+    assert_output --partial "CCTL_NETWORK_RANGE=10.240.0.0/16"
+    assert_output --partial "/24"
+}
+
+@test "cmd_paths: sem redes registradas diz que nao ha nenhuma" {
+    _load_paths_cmd
+    run cmd_paths
+    assert_success
+    assert_output --partial "Nenhuma rede de instalacao registrada"
+}
+
+@test "cmd_paths: lista rede e subnet de cada instancia e diz 'Sem divergencias'" {
+    inventory_mark_installed "app1" "moodle" "c" "app1.example.com" "${WORKDIR}/i/app1" "app1_net" "10.240.0.0/24"
+    netsim_add_network "app1_net" "app1" "10.240.0.0/24" "app1.example.com"
+
+    _load_paths_cmd
+    run cmd_paths
+    assert_success
+    assert_line --regexp "^ *app1 +app1_net +10\\.240\\.0\\.0/24$"
+    assert_output --partial "Sem divergencias"
+}
+
+@test "cmd_paths: divergencia de dono e subnet mostra a subnet real e a registrada" {
+    inventory_mark_installed "app" "moodle" "c" "app.example.com" "${WORKDIR}/i/app" "app_net" "10.240.4.0/24"
+    netsim_add_network "app_net" "outro" "10.240.9.0/24" "app.example.com"
+
+    _load_paths_cmd
+    run cmd_paths
+    assert_success
+    assert_output --partial "DIVERGENCIA: Docker tem dono 'outro'"
+    assert_output --partial "subnet 10.240.9.0/24"
+    assert_output --partial "inventario registra dono 'app' e subnet 10.240.4.0/24"
+}
+
+@test "cmd_paths: rede gerenciada sem instancia no inventario aparece como divergencia (e nada e apagado)" {
+    netsim_add_network "fantasma_net" "fantasma" "10.240.9.0/24" "fantasma.example.com"
+
+    _load_paths_cmd
+    run cmd_paths
+    assert_success
+    assert_output --partial "fantasma_net"
+    assert_output --partial "DIVERGENCIA: rede do cctl sem instancia no inventario"
+    assert_output --partial "docker network rm fantasma_net"
+    run ! grep -q "network rm" "${WORKDIR}/docker_calls.log"
+    netsim_has_network "fantasma_net"
+}
+
+@test "cmd_paths: instancia do inventario cuja rede nao existe aparece como divergencia" {
+    inventory_mark_installed "sumiu" "moodle" "c" "sumiu.example.com" "${WORKDIR}/i/sumiu" "sumiu_net" "10.240.1.0/24"
+
+    _load_paths_cmd
+    run cmd_paths
+    assert_success
+    assert_output --partial "sumiu_net"
+    assert_output --partial "DIVERGENCIA: a rede nao existe"
+    assert_output --partial "cctl up"
+}
+
+@test "cmd_paths: instancia instalada sem rede registrada (versao antiga) aparece como divergencia" {
+    inventory_mark_installed "antigo" "moodle" "c" "antigo.example.com" "${WORKDIR}/i/antigo"
+
+    _load_paths_cmd
+    run cmd_paths
+    assert_success
+    assert_output --partial "antigo"
+    assert_output --partial "instalada sem rede registrada"
+}
+
+@test "cmd_paths: Docker indisponivel nao derruba o comando" {
+    mock_cmd docker 'exit 1'
+    _load_paths_cmd
+    run cmd_paths
+    assert_success
+    assert_output --partial "Docker indisponivel"
+}
+
+# ============================================================
+# Rede das instalacoes (cctl.conf)
+# ============================================================
+
+@test "cctl.conf: range de rede default e 10.240.0.0/16 com prefixo 24" {
+    run _source_cctl_conf -- CCTL_NETWORK_RANGE CCTL_NETWORK_PREFIX
+    assert_success
+    assert_output --partial "CCTL_NETWORK_RANGE=10.240.0.0/16"
+    assert_output --partial "CCTL_NETWORK_PREFIX=24"
+}
+
+@test "cctl.conf: CCTL_NETWORK_RANGE/CCTL_NETWORK_PREFIX aceitam override do ambiente" {
+    run _source_cctl_conf "CCTL_NETWORK_RANGE=192.168.200.0/22" "CCTL_NETWORK_PREFIX=26" -- CCTL_NETWORK_RANGE CCTL_NETWORK_PREFIX
+    assert_success
+    assert_output --partial "CCTL_NETWORK_RANGE=192.168.200.0/22"
+    assert_output --partial "CCTL_NETWORK_PREFIX=26"
+}
+
+@test "cctl.conf: o default de rede e privado (RFC 1918) e o prefixo e coerente" {
+    run _source_cctl_conf -- CCTL_NETWORK_RANGE CCTL_NETWORK_PREFIX
+    assert_success
+    local range prefix
+    range="$(grep '^CCTL_NETWORK_RANGE=' <<< "${output}" | cut -d= -f2)"
+    prefix="$(grep '^CCTL_NETWORK_PREFIX=' <<< "${output}" | cut -d= -f2)"
+    source_lib network.sh
+    network_cidr_in_rfc1918 "${range}"
+    (( prefix >= ${range#*/} && prefix <= 30 ))
+}
+
+@test "cmd_paths: rede gerenciada sem label de projeto aparece como divergencia e nao quebra o comando" {
+    netsim_add_network "semdono" "@none" "10.240.7.0/24"
+
+    _load_paths_cmd
+    run cmd_paths
+    assert_success
+    assert_output --partial "semdono"
+    assert_output --partial "rede gerenciada sem projeto"
 }

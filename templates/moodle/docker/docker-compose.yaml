@@ -111,9 +111,10 @@ volumes:
 #################
 ## Rede Docker ##
 #################
+# A rede e criada pelo cctl no install (nome e faixa escolhidos por ele) e este
+# compose so a usa. Fora do cctl, crie-a antes: docker network create <nome>
+# e exporte CCTL_PROJECT_NETWORK=<nome> (ver docs/TEMPLATE_GUIDE.md).
 networks:
   moodle-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: ${COMPOSE_PROJECT_SUBNET}
+    external: true
+    name: ${CCTL_PROJECT_NETWORK}

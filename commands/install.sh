@@ -7,11 +7,13 @@
 #   1. Valida contexto (project.conf existe, .cctl-instance NAO existe)
 #   2. Source project.conf + .env
 #   3. Gera senhas (AUTO_PASSWORD_VARS)
-#   4. Aloca subnet livre
-#   5. Renderiza templates
-#   6. Pre-flight checks
+#   4. Pre-flight checks (sudo, Docker, disco, range de rede, DNS)
+#   5. Rede do projeto: reaproveita a que ja existe ou sugere a proxima
+#      faixa livre do range do cctl.conf e cria (com confirmacao se houver
+#      terminal); grava CCTL_PROJECT_NETWORK e COMPOSE_PROJECT_SUBNET no .env
+#   6. Renderiza templates
 #   7. Pull/build imagens
-#   8. Up containers
+#   8. Up containers (a rede ja existe: o compose so a usa como "external")
 #   9. SSL (se HOST_SSL) + Nginx (se HOST_NGINX) — SSL antes do nginx para
 #      que o certificado ja exista quando "nginx -t" validar a config final
 #  10. Cron (se HOST_CRON)
@@ -39,29 +41,25 @@ cmd_install() {
     echo -e "  Dominio: ${CYAN}${DOMAIN_NAME:-?}${RESET}"
     echo ""
 
-    # 2b. Limpa rede orfa de uma instalacao/down anterior que tenha falhado
-    # antes de desconectar o nginx-proxy (ver network_cleanup_orphans em
-    # lib/network.sh) — sem isso, a rede orfa fica com o proxy conectado e
-    # o "docker compose up" seguinte pode reaproveitar/colidir com ela.
-    _install_cleanup_orphan_network
-
     # 3. Gera senhas
     passwords_generate_all
 
-    # 4. Aloca subnet
-    _install_allocate_subnet || return 1
+    # 4. Pre-flight checks — ANTES de criar a rede: o range de rede tambem
+    # e conferido aqui, e nao faz sentido reservar uma faixa num host que
+    # nem passa nas verificacoes.
+    validate_preflight_install || return 1
 
-    # 5. Renderiza templates
+    # 5. Rede do projeto (a rede existe antes do primeiro "compose up")
+    _install_ensure_network || return 1
+
+    # 6. Renderiza templates
     _install_set_ssl_paths || return 1
     msg_step "TEMPLATES" "Renderizando templates..."
     env_render_all_templates
     log_success "Templates renderizados"
 
-    # 6. Recarrega .env apos geracoes de senhas e subnet
+    # 7. Recarrega .env apos geracoes de senhas e rede
     env_load
-
-    # 7. Pre-flight checks
-    validate_preflight_install || return 1
 
     # 8. Pull imagens
     compose_pull || return 1
@@ -95,6 +93,7 @@ cmd_install() {
     echo -e "  Projeto:  ${CYAN}${PROJECT_TYPE}${RESET}"
     echo -e "  Cliente:  ${CYAN}${CLIENT_NAME}${RESET}"
     echo -e "  Dominio:  ${CYAN}${DOMAIN_NAME}${RESET}"
+    echo -e "  Rede:     ${CYAN}${CCTL_PROJECT_NETWORK:-N/A}${RESET}"
     echo -e "  Subnet:   ${CYAN}${COMPOSE_PROJECT_SUBNET:-N/A}${RESET}"
     echo ""
     echo -e "  Comandos uteis:"
@@ -118,29 +117,11 @@ _install_set_ssl_paths() {
     env_set_var "SSL_KEY_PATH" "${key_path}"
 }
 
-# Remove rede orfa do projeto (com o nginx-proxy ainda preso nela) deixada
-# por uma instalacao/down anterior que falhou antes de desconectar o proxy
-# — para que um `cctl install` logo apos um `install` malsucedido tambem se
-# recupere, em vez de herdar a rede velha. Sem COMPOSE_PROJECT_NAME (nao
-# deveria acontecer a essa altura, ja carregado do manifest) e um no-op.
-_install_cleanup_orphan_network() {
-    if [[ -z "${COMPOSE_PROJECT_NAME:-}" ]]; then
-        return 0
-    fi
-
-    msg_step "REDE" "Verificando rede orfa de instalacao anterior..."
-    network_cleanup_orphans "${COMPOSE_PROJECT_NAME}"
-}
-
-# Aloca subnet e seta no .env
-_install_allocate_subnet() {
-    msg_step "SUBNET" "Alocando subnet..."
-
-    local subnet
-    subnet=$(network_allocate_subnet) || return 1
-
-    env_set_var "COMPOSE_PROJECT_SUBNET" "${subnet}"
-    log_success "Subnet alocada: ${subnet}"
+# Cria (ou reaproveita) a rede do projeto — logica em
+# lib/network.sh:network_provision_for_install.
+_install_ensure_network() {
+    msg_step "REDE" "Preparando a rede do projeto..."
+    network_provision_for_install
 }
 
 # Build de imagens locais se houver Dockerfiles no diretorio
@@ -153,6 +134,21 @@ _install_build_if_needed() {
     fi
 }
 
+# Conecta o nginx-proxy a rede do projeto (CCTL_PROJECT_NETWORK, criada no
+# passo da rede), com alias = DOMAIN_NAME. Sem a rede registrada no .env, so
+# avisa — o install ja teria falhado antes disso.
+_install_connect_proxy() {
+    if [[ -z "${CCTL_PROJECT_NETWORK:-}" ]]; then
+        log_warn "CCTL_PROJECT_NETWORK nao definido para o projeto ${COMPOSE_PROJECT_NAME}, pulando conexao do nginx-proxy"
+        return 0
+    fi
+    if ! network_ensure_nginx_connected "${CCTL_PROJECT_NETWORK}" "${DOMAIN_NAME:-}"; then
+        log_error "Nao foi possivel conectar o nginx-proxy a rede ${CCTL_PROJECT_NETWORK}; o vhost nao sera publicado."
+        return 1
+    fi
+    return 0
+}
+
 # Configura nginx no host (se HOST_NGINX=true)
 _install_nginx() {
     if [[ "${HOST_NGINX:-false}" != "true" ]]; then
@@ -162,18 +158,10 @@ _install_nginx() {
 
     msg_step "NGINX" "Configurando Nginx..."
 
-    # Conecta a rede antes de testar o config (resolver Docker precisa da rede)
-    local project_networks project_network
-    project_networks=$(network_list_for_project "${COMPOSE_PROJECT_NAME}")
-    project_network=$(head -n1 <<< "${project_networks}")
-    if [[ -z "${project_network}" ]]; then
-        log_warn "Nenhuma rede encontrada para o projeto ${COMPOSE_PROJECT_NAME}, pulando conexao do nginx-proxy"
-    else
-        if [[ $(wc -l <<< "${project_networks}") -gt 1 ]]; then
-            log_warn "Mais de uma rede encontrada para o projeto ${COMPOSE_PROJECT_NAME}, usando: ${project_network}"
-        fi
-        network_connect_nginx "${project_network}"
-    fi
+    # Conecta a rede antes de testar o config (resolver Docker precisa da rede).
+    # O chamador usa `|| return`, que inibe errexit dentro desta funcao; cheque
+    # explicitamente para nunca publicar um vhost com o proxy desconectado.
+    _install_connect_proxy || return 1
 
     # Vhost HTTP-only quando SSL esta desabilitado: SSL_MODE=none ou
     # HOST_SSL!=true (o cctl nao olha variaveis especificas de cada projeto).
@@ -199,7 +187,21 @@ _install_nginx() {
         fi
     fi
 
+    # Antes de publicar: todo alvo do vhost tem de ser <container>.<rede>
+    # (rede vazia ou nome curto = nao publica).
+    vhost_validate_targets "${nginx_conf}" "${CCTL_PROJECT_NETWORK:-}" || return 1
+
     nginx_enable_site "${DOMAIN_NAME}" "${nginx_conf}" || return 1
+
+    # Depois de publicar: de dentro do proxy, cada alvo resolve para o
+    # container DESTE projeto.
+    if [[ -n "${CCTL_PROJECT_NETWORK:-}" ]]; then
+        network_check_vhost_targets "${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf" "${CCTL_PROJECT_NETWORK}" || {
+            log_error "O vhost foi publicado, mas o alvo nao aponta para o container deste projeto. Instalacao interrompida."
+            msg_info "O vhost foi MANTIDO de proposito (${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf): o alvo <container>.<rede> so resolve dentro da rede deste projeto, entao o pior caso e um erro 502 — nunca o site de outro projeto. Corrija a causa apontada acima e rode 'cctl install' de novo."
+            return 1
+        }
+    fi
 }
 
 # Solicita/instala certificado SSL (se HOST_SSL=true e SSL_MODE!=none).
@@ -259,20 +261,12 @@ server {
 }
 EOF
 
-    local project_networks project_network
-    project_networks=$(network_list_for_project "${COMPOSE_PROJECT_NAME}")
-    project_network=$(head -n1 <<< "${project_networks}")
-    if [[ -z "${project_network}" ]]; then
-        log_warn "Nenhuma rede encontrada para o projeto ${COMPOSE_PROJECT_NAME}, pulando conexao do nginx-proxy"
-    else
-        if [[ $(wc -l <<< "${project_networks}") -gt 1 ]]; then
-            log_warn "Mais de uma rede encontrada para o projeto ${COMPOSE_PROJECT_NAME}, usando: ${project_network}"
-        fi
-        network_connect_nginx "${project_network}"
-    fi
-
     local result=0
-    nginx_enable_site "${domain}" "${tmp_conf}" || result=1
+    if ! _install_connect_proxy; then
+        result=1
+    else
+        nginx_enable_site "${domain}" "${tmp_conf}" || result=1
+    fi
 
     rm -f "${tmp_conf}"
 
@@ -343,7 +337,13 @@ EOF
     # demais passos nao-essenciais do fluxo (cron, hook post-install, ver
     # acima). log_error (nao log_warn) porque, diferente deles, o efeito e
     # "cctl list" nao ver esta instancia — vale a visibilidade mais forte.
-    if ! inventory_mark_installed "${COMPOSE_PROJECT_NAME}" "${PROJECT_TYPE}" "${CLIENT_NAME}" "${DOMAIN_NAME}" "$(pwd)"; then
+    # A rede e a faixa vao junto (so quando existem): sem registro previo, e
+    # aqui que a reserva da faixa entra no inventario.
+    local -a _inv_network_args=()
+    if [[ -n "${CCTL_PROJECT_NETWORK:-}" ]]; then
+        _inv_network_args=("${CCTL_PROJECT_NETWORK}" "${COMPOSE_PROJECT_SUBNET:-}")
+    fi
+    if ! inventory_mark_installed "${COMPOSE_PROJECT_NAME}" "${PROJECT_TYPE}" "${CLIENT_NAME}" "${DOMAIN_NAME}" "$(pwd)" "${_inv_network_args[@]}"; then
         log_error "Instancia instalada, mas falhou o registro/atualizacao no inventario (cctl list pode nao refletir esta instancia)."
     fi
 }

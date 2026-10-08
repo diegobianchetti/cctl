@@ -1,11 +1,14 @@
 #!/usr/bin/env bats
 # tests/validate.bats — testes para lib/validate.sh
 
+bats_require_minimum_version 1.5.0
+
 setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh core.sh validate.sh
+    source_lib colors.sh log.sh core.sh inventory.sh network.sh validate.sh
+    setup_network_env
     # sudo funcional por padrao; testes especificos sobrescrevem
     core_sudo_check() { return 0; }
 }
@@ -235,6 +238,118 @@ teardown() {
     assert_failure
     run validate_service_name "app db"
     assert_failure
+}
+
+# --- validate_network_range (range de rede do cctl) -------------------------
+
+@test "validate_network_range: default 10.240.0.0/16 sem rotas e sem daemon.json passa" {
+    run validate_network_range
+    assert_success
+}
+
+@test "validate_network_range: range publico -> erro dizendo o que fazer" {
+    export CCTL_NETWORK_RANGE="172.32.0.0/16"
+    run validate_network_range
+    assert_failure
+    assert_output --partial "nao e privado"
+    assert_output --partial "CCTL_NETWORK_RANGE"
+}
+
+@test "validate_network_range: range que cruza a borda do bloco privado -> erro" {
+    export CCTL_NETWORK_RANGE="172.0.0.0/11"
+    run validate_network_range
+    assert_failure
+    assert_output --partial "nao e privado"
+}
+
+@test "validate_network_range: sobreposto ao pool padrao do Docker (sem daemon.json) -> erro" {
+    export CCTL_NETWORK_RANGE="172.20.0.0/16"
+    run validate_network_range
+    assert_failure
+    assert_output --partial "pool automatico do Docker"
+    assert_output --partial "172.20.0.0/16"
+}
+
+@test "validate_network_range: 192.168.0.0/16 tambem e pool padrao do Docker -> erro" {
+    export CCTL_NETWORK_RANGE="192.168.50.0/24" CCTL_NETWORK_PREFIX="28"
+    run validate_network_range
+    assert_failure
+    assert_output --partial "pool automatico do Docker"
+}
+
+@test "validate_network_range: daemon.json com default-address-pools troca o pool que vale" {
+    cat > "${BATS_TEST_TMPDIR}/daemon.json" <<'EOF'
+{ "default-address-pools": [ {"base": "10.240.128.0/17", "size": 24} ] }
+EOF
+    export DOCKER_DAEMON_JSON="${BATS_TEST_TMPDIR}/daemon.json"
+
+    # o range padrao cruza o pool configurado -> erro
+    run validate_network_range
+    assert_failure
+    assert_output --partial "10.240.128.0/17"
+
+    # com o daemon.json valendo, o default do Docker (172.x) deixa de contar:
+    # 172.20.0.0/16 passa porque o pool agora e outro
+    export CCTL_NETWORK_RANGE="172.20.0.0/16"
+    run validate_network_range
+    assert_success
+}
+
+@test "validate_network_range: sobreposto a rota de eth0 -> erro citando a rota" {
+    mock_ip_routes "10.240.4.0/24 dev eth0 proto kernel scope link"
+    run validate_network_range
+    assert_failure
+    assert_output --partial "rota do host"
+    assert_output --partial "10.240.4.0/24"
+}
+
+@test "validate_network_range: rota de br-* e de docker0 nao conta" {
+    mock_ip_routes \
+        "10.240.4.0/24 dev br-0a1b2c3d4e5f proto kernel scope link" \
+        "10.240.0.0/16 dev docker0 proto kernel scope link" \
+        "default via 192.168.1.1 dev eth0"
+    run validate_network_range
+    assert_success
+}
+
+@test "validate_network_range: rota em br-lan (bridge do operador) dentro do range -> erro" {
+    mock_ip_routes "10.240.4.0/24 dev br-lan proto kernel scope link"
+    run validate_network_range
+    assert_failure
+    assert_output --partial "rota do host"
+    assert_output --partial "br-lan"
+}
+
+@test "validate_network_range: VPN com policy routing (tabela nao-main) cruzando o range -> erro" {
+    mock_ip_routes "10.240.8.0/24 dev tun0 table 100 scope link"
+    run validate_network_range
+    assert_failure
+    assert_output --partial "10.240.8.0/24"
+}
+
+@test "validate_network_range: prefixo incoerente -> erro de configuracao" {
+    export CCTL_NETWORK_PREFIX="8"
+    run validate_network_range
+    assert_failure
+    assert_output --partial "CCTL_NETWORK_PREFIX"
+}
+
+@test "validate_preflight_install: range de rede invalido -> rc 1 e mostra a mensagem" {
+    mock_cmd docker 'exit 0'
+    unset DOMAIN_NAME
+    export CCTL_NETWORK_RANGE="8.8.0.0/16"
+    run validate_preflight_install < /dev/null
+    assert_failure
+    assert_output --partial "nao e privado"
+    assert_output --partial "1 verificacao(oes) falharam"
+}
+
+@test "validate_preflight_install: range de rede ok -> item aprovado" {
+    mock_cmd docker 'exit 0'
+    unset DOMAIN_NAME
+    run validate_preflight_install
+    assert_success
+    assert_line "[OK] Range de rede (10.240.0.0/16)"
 }
 
 # --- validate_preflight_install / severidade do DNS por SSL_MODE ----------

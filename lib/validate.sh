@@ -213,6 +213,43 @@ validate_sudo() {
     return 1
 }
 
+# Confere o range de rede do cctl (CCTL_NETWORK_RANGE) antes de criar a rede
+# do projeto. Falha, dizendo o que fazer, quando o range:
+#   - esta mal formado ou incoerente com CCTL_NETWORK_PREFIX;
+#   - nao esta inteiro dentro de uma faixa privada (RFC 1918);
+#   - se sobrepoe as faixas que o Docker usa para criar redes sozinho;
+#   - se sobrepoe a uma rota do host que nao e de bridge Docker (LAN, VPN...).
+validate_network_range() {
+    network_validate_config || return 1
+
+    local range="${CCTL_NETWORK_RANGE}" rc=0
+
+    if ! network_cidr_in_rfc1918 "${range}"; then
+        log_error "O range de rede ${range} (CCTL_NETWORK_RANGE, cctl.conf) nao e privado. Use uma faixa dentro de 10.0.0.0/8, 172.16.0.0/12 ou 192.168.0.0/16 — faixas publicas colidem com enderecos reais da internet."
+        rc=1
+    fi
+
+    local pool
+    while IFS= read -r pool; do
+        [[ -n "${pool}" ]] || continue
+        if network_cidr_overlap "${range}" "${pool}"; then
+            log_error "O range de rede ${range} se sobrepoe ao pool automatico do Docker (${pool}). Escolha outro CCTL_NETWORK_RANGE em cctl.conf, ou mude o default-address-pools do Docker."
+            rc=1
+        fi
+    done < <(network_docker_pools)
+
+    local cidr origin
+    while IFS=$'\t' read -r cidr origin; do
+        [[ -n "${cidr}" ]] || continue
+        if network_cidr_overlap "${range}" "${cidr}"; then
+            log_error "O range de rede ${range} se sobrepoe a ${origin}: ${cidr}. Escolha outro CCTL_NETWORK_RANGE em cctl.conf que nao cruze essa rota."
+            rc=1
+        fi
+    done < <(network_host_routes)
+
+    return "${rc}"
+}
+
 # Executa todos os pre-flight checks para install
 validate_preflight_install() {
     local errors=0
@@ -233,6 +270,12 @@ validate_preflight_install() {
 
     if validate_disk_space 1024; then
         msg_success "Espaco em disco"
+    else
+        ((errors++))
+    fi
+
+    if validate_network_range; then
+        msg_success "Range de rede (${CCTL_NETWORK_RANGE})"
     else
         ((errors++))
     fi

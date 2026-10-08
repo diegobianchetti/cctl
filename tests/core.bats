@@ -192,3 +192,27 @@ EOF
     [[ ! -s "${BATS_TEST_TMPDIR}/sudo.log" ]]
     teardown_mock_bin
 }
+
+@test "core_load_manifest: project.conf antigo com SUBNET_RANGE/SUBNET_PREFIX_LEN -> aviso de que agora quem manda e o cctl.conf" {
+    export CCTL_CONTEXT="project"
+    export CCTL_NETWORK_RANGE="10.240.0.0/16" CCTL_NETWORK_PREFIX="24"
+    cat > project.conf <<'EOF'
+PROJECT_TYPE="moodle"
+SUBNET_RANGE="172.32.0.0/16"
+SUBNET_PREFIX_LEN=24
+EOF
+    run core_load_manifest
+    assert_success
+    assert_output --partial "SUBNET_RANGE/SUBNET_PREFIX_LEN"
+    assert_output --partial "ignorado"
+    assert_output --partial "CCTL_NETWORK_RANGE=10.240.0.0/16"
+}
+
+@test "core_load_manifest: project.conf sem SUBNET_RANGE nao avisa nada sobre rede" {
+    export CCTL_CONTEXT="project"
+    unset SUBNET_RANGE SUBNET_PREFIX_LEN
+    echo 'PROJECT_TYPE="moodle"' > project.conf
+    run core_load_manifest
+    assert_success
+    refute_output --partial "SUBNET_RANGE"
+}

@@ -6,6 +6,8 @@
 # (setup_mock_bin). `sleep` tambem e mockado (so registra a chamada) para os
 # testes de timeout serem rapidos e deterministicos.
 
+bats_require_minimum_version 1.5.0
+
 setup() {
     load 'helpers/common'
     load_bats_libs
@@ -21,6 +23,8 @@ setup() {
     cd "${WORKDIR}" || return 1
 
     export COMPOSE_PROJECT_NAME="testproj"
+    export DOMAIN_NAME="acme.example.br"
+    export CCTL_PROJECT_NETWORK="testproj_net"
     COMPOSE_FILES=("docker-compose.yaml")
     export NGINX_CONTAINER_NAME="nginx-proxy"
     export NGINX_VHOSTS_DIR="${WORKDIR}/vhosts.d"
@@ -60,8 +64,11 @@ teardown() {
 
 # --- Fixtures ----------------------------------------------------------------
 
+# Grava o vhost com o alvo no formato novo: o 1o argumento e o nome do servico
+# ("moodle-app" ou "moodle-app-green"); o alvo escrito e
+# "testproj-<servico>.testproj_net" (<container>.<rede do projeto>).
 _write_vhost() {
-    local alias="$1" port="$2" scheme="$3"
+    local alias="testproj-$1.testproj_net" port="$2" scheme="$3"
     cat > "${VHOST_FILE}" <<EOF
 server {
 	listen 80;
@@ -114,7 +121,11 @@ _mock_docker_rollout() {
             network)
                 case "$2" in
                     ls) echo "${PROJECT_NETWORK:-testproj_net}"; exit 0 ;;
-                    connect) exit 0 ;;
+                    connect)
+                        [[ "${NETWORK_CONNECT_FAIL:-0}" == "1" ]] && exit 1
+                        : > "'"${WORKDIR}"'/proxy_connected"
+                        exit 0
+                        ;;
                     inspect) exit 0 ;;
                     *) exit 0 ;;
                 esac
@@ -185,6 +196,15 @@ _mock_docker_rollout() {
                 fi
                 [[ -z "${fmt}" ]] && exit 0
                 case "${fmt}" in
+                    *"range \$k, \$v := .NetworkSettings.Networks"*)
+                        [[ -e "'"${WORKDIR}"'/proxy_connected" ]] && echo "${PROJECT_NETWORK:-testproj_net}"
+                        exit 0
+                        ;;
+                    *"NetworkSettings.Networks"*)
+                        # IP do container na rede do projeto: blue .10, green .11
+                        [[ "${container}" == *-green ]] && echo "10.240.0.11" || echo "10.240.0.10"
+                        exit 0
+                        ;;
                     *"yes{{end}}"*)
                         [[ "${HAS_DOCKER_HEALTHCHECK:-0}" == "1" ]] && echo "yes"
                         exit 0
@@ -228,6 +248,9 @@ _mock_docker_rollout() {
                         exit 1
                         ;;
                     curl)
+                        if [[ "${PROBE_REQUIRE_HOST:-0}" == "1" ]]; then
+                            [[ "$2" == "-sS" && "$3" == "-k" && "$4" == "--max-time" && "$6" == "-H" && "$7" == "Host: ${PROBE_EXPECT_HOST}" ]] || exit 41
+                        fi
                         n=0
                         [[ -f "'"${WORKDIR}"'/up_calls.count" ]] && n=$(cat "'"${WORKDIR}"'/up_calls.count")
                         if [[ "${PROBE_FAIL_FIRST_N:-0}" -gt 0 && "${n}" -le "${PROBE_FAIL_FIRST_N}" ]]; then
@@ -239,7 +262,27 @@ _mock_docker_rollout() {
                         exit "${PROBE_CURL_EXIT:-0}"
                         ;;
                     wget)
+                        if [[ "${PROBE_REQUIRE_HOST:-0}" == "1" ]]; then
+                            [[ "$2" == "-q" && "$3" == "-O" && "$4" == "/dev/null" && "$5" == "--no-check-certificate" && "$6" == "-T" && "$8" == "--header=Host: ${PROBE_EXPECT_HOST}" ]] || exit 41
+                        fi
                         exit "${PROBE_WGET_EXIT:-0}"
+                        ;;
+                    getent)
+                        # getent ahostsv4 <container>.<rede> — "IP STREAM nome"
+                        [[ "${GETENT_FAIL:-0}" == "1" ]] && exit 2
+                        # GETENT_FAIL_FIRST=1: so a 1a consulta (pre-troca) resolve certo
+                        gc="'"${WORKDIR}"'/getent.count"
+                        gn=0; [[ -f "${gc}" ]] && gn=$(cat "${gc}"); gn=$((gn+1)); echo "${gn}" > "${gc}"
+                        if [[ -n "${GETENT_BAD_AFTER_FIRST:-}" && "${gn}" -gt 1 ]]; then
+                            echo "${GETENT_BAD_AFTER_FIRST} STREAM $3"; exit 0
+                        fi
+                        if [[ -n "${GETENT_IP:-}" ]]; then
+                            for gip in ${GETENT_IP//,/ }; do echo "${gip} STREAM $3"; done
+                            exit 0
+                        fi
+                        name="${3%.testproj_net}"
+                        [[ "${name}" == *-green ]] && echo "10.240.0.11 STREAM $3" || echo "10.240.0.10 STREAM $3"
+                        exit 0
                         ;;
                     nginx)
                         case "$2" in
@@ -338,27 +381,52 @@ _run_strict() {
 #    solto), o mesmo padrao ja usado em tests/down.bats.
 # =============================================================================
 
-@test "_rollout_project_network (regressao B1): projeto 'moodle' resolve a rede certa, nao a de 'moodle-lab'" {
+@test "_rollout_project_network: devolve CCTL_PROJECT_NETWORK do .env (nao procura rede por nome/label)" {
     export COMPOSE_PROJECT_NAME="moodle"
+    export CCTL_PROJECT_NETWORK="moodle_net"
+    # redes "parecidas" que a busca antiga por prefixo pegaria
     declare -A CCTL_TEST_NETS=(
-        [moodle_network]=""
-        [moodle-lab_moodle-network]=""
+        [moodle_network]="moodle"
+        [moodle-lab_moodle-network]="moodle-lab"
     )
     mock_docker_with_networks CCTL_TEST_NETS "${WORKDIR}/docker_calls.log"
 
     run _rollout_project_network
     assert_success
-    assert_output "moodle_network"
+    assert_output "moodle_net"
+    # nenhuma consulta ao docker: a rede vem do .env
+    run ! grep -q "network ls" "${WORKDIR}/docker_calls.log"
 }
 
-@test "_rollout_project_network: com label exato do compose, resolve pelo label" {
+@test "_rollout_project_network: sem CCTL_PROJECT_NETWORK devolve vazio" {
     export COMPOSE_PROJECT_NAME="moodle"
-    declare -A CCTL_TEST_NETS=( [moodle_network]="moodle" [moodle-lab_moodle-network]="moodle-lab" )
-    mock_docker_with_networks CCTL_TEST_NETS "${WORKDIR}/docker_calls.log"
+    unset CCTL_PROJECT_NETWORK
 
     run _rollout_project_network
     assert_success
-    assert_output "moodle_network"
+    assert_output ""
+}
+
+@test "rollout_bluegreen: liga o nginx-proxy a CCTL_PROJECT_NETWORK (rede do .env) antes de trocar o trafego" {
+    export CCTL_PROJECT_NETWORK="testproj_net" DOMAIN_NAME="testproj.example.com"
+
+    run rollout_bluegreen --service moodle-app
+    assert_success
+    grep -q "network connect --alias testproj.example.com testproj_net nginx-proxy" "${WORKDIR}/docker.log"
+}
+
+@test "[set -e real] bluegreen: proxy existente com conexao recusada aborta antes do candidato" {
+    # Regressao da classe: o `|| true` antigo em rollout_bluegreen convertia
+    # esta falha real em sucesso. O healthcheck docker passaria sem DNS, logo
+    # o rollout chegaria ao switch e anunciaria sucesso com proxy isolado.
+    export NETWORK_CONNECT_FAIL=1 HAS_DOCKER_HEALTHCHECK=1 HEALTHY_AFTER=1
+
+    _run_strict rollout_bluegreen --service moodle-app --health-mode docker
+    assert_failure
+    assert_output --partial "nginx-proxy existe"
+    [[ ! -e "${ROLLOUT_STATE_FILE}" ]]
+    run grep -q -- "up -d --no-deps --force-recreate moodle-app-green" "${WORKDIR}/docker.log"
+    assert_failure
 }
 
 # =============================================================================
@@ -374,7 +442,7 @@ _run_strict() {
 @test "bluegreen: vhost reescreve SO o set \$target apos sucesso" {
     run rollout_bluegreen --service moodle-app
     assert_success
-    grep -q 'set \$target moodle-app-green:443;' "${VHOST_FILE}"
+    grep -q 'set \$target testproj-moodle-app-green.testproj_net:443;' "${VHOST_FILE}"
     grep -q 'proxy_pass https://\$target;' "${VHOST_FILE}"
     grep -q 'ssl_certificate     /etc/certs/acme.pem;' "${VHOST_FILE}"
 }
@@ -398,7 +466,7 @@ _run_strict() {
     assert_success
     [[ -f "${ROLLOUT_STATE_FILE}" ]]
     grep -q 'LIVE_SLOT="green"' "${ROLLOUT_STATE_FILE}"
-    grep -q 'LIVE_TARGET="moodle-app-green:443"' "${ROLLOUT_STATE_FILE}"
+    grep -q 'LIVE_TARGET="testproj-moodle-app-green.testproj_net:443"' "${ROLLOUT_STATE_FILE}"
 }
 
 # =============================================================================
@@ -482,7 +550,30 @@ _run_strict() {
     # container errado (com "|| true" mascarando que nunca batia). A URL
     # sondada e que aponta pro alias do candidato.
     grep -q "^exec nginx-proxy curl" "${WORKDIR}/docker.log"
-    grep -q "https://moodle-app-green:443/" "${WORKDIR}/docker.log"
+    grep -q "https://testproj-moodle-app-green.testproj_net:443/" "${WORKDIR}/docker.log"
+}
+
+@test "bluegreen: sonda curl envia exatamente Host do DOMAIN_NAME (falha sem header ou dominio errado)" {
+    export PROBE_REQUIRE_HOST=1 PROBE_EXPECT_HOST="acme.example.br"
+
+    run rollout_bluegreen --service moodle-app --health-mode http
+    assert_success
+
+    export DOMAIN_NAME="outro.example.br"
+    run rollout_bluegreen --service moodle-app --health-mode http --timeout 0
+    assert_failure
+}
+
+@test "bluegreen: sonda wget envia exatamente Host do DOMAIN_NAME (falha sem header ou dominio errado)" {
+    export HAS_CURL=0 HAS_WGET=1
+    export PROBE_REQUIRE_HOST=1 PROBE_EXPECT_HOST="acme.example.br"
+
+    run rollout_bluegreen --service moodle-app --health-mode http
+    assert_success
+
+    export DOMAIN_NAME="outro.example.br"
+    run rollout_bluegreen --service moodle-app --health-mode http --timeout 0
+    assert_failure
 }
 
 @test "bluegreen: healthcheck http com auto-deteccao curl->wget quando curl ausente" {
@@ -532,8 +623,8 @@ _run_strict() {
     export PROBE_HTTP_CODE=500
     run rollout_bluegreen --service moodle-app --timeout 0
     assert_failure
-    grep -q 'set \$target moodle-app:443;' "${VHOST_FILE}"
-    run grep -q 'set \$target moodle-app-green:443;' "${VHOST_FILE}"
+    grep -q 'set \$target testproj-moodle-app.testproj_net:443;' "${VHOST_FILE}"
+    run grep -q 'set \$target testproj-moodle-app-green.testproj_net:443;' "${VHOST_FILE}"
     assert_failure
 }
 
@@ -631,7 +722,7 @@ EOF
     run rollout_bluegreen --service moodle-app
     assert_success
     grep -q -- "up -d --no-deps --force-recreate moodle-app" "${WORKDIR}/docker.log"
-    grep -q 'set \$target moodle-app:443;' "${VHOST_FILE}"
+    grep -q 'set \$target testproj-moodle-app.testproj_net:443;' "${VHOST_FILE}"
     grep -q 'LIVE_SLOT="blue"' "${ROLLOUT_STATE_FILE}"
 }
 
@@ -642,13 +733,13 @@ EOF
 @test "bluegreen: --health-path e --health-port customizados chegam na URL da sonda" {
     run rollout_bluegreen --service moodle-app --health-path /healthz --health-port 8443
     assert_success
-    grep -q "https://moodle-app-green:8443/healthz" "${WORKDIR}/docker.log"
+    grep -q "https://testproj-moodle-app-green.testproj_net:8443/healthz" "${WORKDIR}/docker.log"
 }
 
 @test "bluegreen: state grava a porta do vhost (nao a porta da sonda) quando --health-port diverge" {
     run rollout_bluegreen --service moodle-app --health-port 8443
     assert_success
-    grep -q 'LIVE_TARGET="moodle-app-green:443"' "${ROLLOUT_STATE_FILE}"
+    grep -q 'LIVE_TARGET="testproj-moodle-app-green.testproj_net:443"' "${ROLLOUT_STATE_FILE}"
     run grep -q "8443" "${ROLLOUT_STATE_FILE}"
     assert_failure
 }
@@ -736,6 +827,19 @@ EOF
     run rollout_rolling --service moodle-app --image ghcr.io/acme/app:v4
     assert_success
     grep -q -- "up -d --no-deps --force-recreate moodle-app" "${WORKDIR}/docker.log"
+}
+
+@test "rolling: conexao recusada aborta antes do healthcheck docker saudavel e nao grava estado" {
+    # O healthcheck docker e saudavel sem DNS; sem a propagacao desta falha,
+    # o rollout chegava ao caminho feliz e anunciava sucesso com proxy isolado.
+    export NETWORK_CONNECT_FAIL=1 HAS_DOCKER_HEALTHCHECK=1 HEALTHY_AFTER=1
+
+    run rollout_rolling --service moodle-app --health-mode docker
+    assert_failure
+    assert_output --partial "Rollout interrompido"
+    [[ ! -e "${ROLLOUT_STATE_FILE}" ]]
+    run grep -q -- "up -d --no-deps --force-recreate moodle-app" "${WORKDIR}/docker.log"
+    assert_failure
 }
 
 @test "N5 (revisao Sprint 5, rodada 3): rolling sem --image nao apaga a imagem ja registrada no state file" {
@@ -947,7 +1051,7 @@ EOF
     run rollout_bluegreen --service moodle-app
     assert_success
     refute_output --partial "Nao foi possivel determinar o alvo atual do vhost"
-    grep -q 'set \$target moodle-app:443;' "${VHOST_FILE}"
+    grep -q 'set \$target testproj-moodle-app.testproj_net:443;' "${VHOST_FILE}"
     grep -q 'LIVE_SLOT="blue"' "${ROLLOUT_STATE_FILE}"
 }
 
@@ -1473,8 +1577,8 @@ server {
 
 	location / {
 		resolver 127.0.0.11;
-		# set $target moodle-app-green:80;
-		set $target moodle-app:443;
+		# set $target testproj-moodle-app-green.testproj_net:80;
+		set $target testproj-moodle-app.testproj_net:443;
 		proxy_pass https://$target;
 	}
 }
@@ -1484,7 +1588,7 @@ EOF
     assert_success
     assert_output "blue"
 
-    run _rollout_vhost_target "${VHOST_FILE}" moodle-app
+    run _rollout_vhost_target "${VHOST_FILE}" testproj-moodle-app.testproj_net
     assert_success
     assert_output "https 443"
 }
@@ -1500,18 +1604,193 @@ server {
 
 	location / {
 		resolver 127.0.0.11;
-		# set $target moodle-app-green:80;
-		set $target moodle-app:443;
+		# set $target testproj-moodle-app-green.testproj_net:80;
+		set $target testproj-moodle-app.testproj_net:443;
 		proxy_pass https://$target;
 	}
 }
 EOF
 
-    run _rollout_switch_vhost "${VHOST_FILE}" moodle-app moodle-app-green
+    run _rollout_switch_vhost "${VHOST_FILE}" testproj-moodle-app.testproj_net testproj-moodle-app-green.testproj_net
     assert_success
 
-    grep -q '# set \$target moodle-app-green:80;' "${VHOST_FILE}"
-    grep -qE '^[[:space:]]+set \$target moodle-app-green:443;$' "${VHOST_FILE}"
+    grep -q '# set \$target testproj-moodle-app-green.testproj_net:80;' "${VHOST_FILE}"
+    grep -qE '^[[:space:]]+set \$target testproj-moodle-app-green.testproj_net:443;$' "${VHOST_FILE}"
     run grep -c 'moodle-app-green' "${VHOST_FILE}"
     assert_output "2"
+}
+
+# =============================================================================
+# Alvo do vhost = <container>.<rede do projeto>
+# =============================================================================
+
+@test "_rollout_slot_alias: blue e green no formato <container>.<rede>" {
+    run _rollout_slot_alias "moodle-app" blue
+    assert_output "testproj-moodle-app.testproj_net"
+    run _rollout_slot_alias "moodle-app" green
+    assert_output "testproj-moodle-app-green.testproj_net"
+}
+
+@test "rollout: instancia sem CCTL_PROJECT_NETWORK -> recusa no inicio, sem tocar em nada" {
+    unset CCTL_PROJECT_NETWORK
+
+    run rollout_bluegreen --service moodle-app
+    assert_failure
+    assert_output --partial "Instancia sem rede do cctl"
+    assert_output --partial "cctl destroy"
+    run ! grep -q "up -d" "${WORKDIR}/docker.log"
+
+    run rollout_rolling --service moodle-app
+    assert_failure
+    assert_output --partial "Instancia sem rede do cctl"
+}
+
+@test "_rollout_resolve_live_slot: 'dspace' x 'dspace-angular' nao se confundem (casa o alvo inteiro)" {
+    cat > "${VHOST_FILE}" <<'EOF'
+server {
+	location /server {
+		set $target testproj-dspace.testproj_net:8080;
+		proxy_pass http://$target;
+	}
+	location / {
+		set $target testproj-dspace-angular-green.testproj_net:4000;
+		proxy_pass http://$target;
+	}
+}
+EOF
+    run _rollout_resolve_live_slot "dspace"
+    assert_output "blue"
+    run _rollout_resolve_live_slot "dspace-angular"
+    assert_output "green"
+
+    # alvo do frontend em blue, backend em green: cada servico enxerga o seu
+    cat > "${VHOST_FILE}" <<'EOF'
+server {
+	location /server {
+		set $target testproj-dspace-green.testproj_net:8080;
+		proxy_pass http://$target;
+	}
+	location / {
+		set $target testproj-dspace-angular.testproj_net:4000;
+		proxy_pass http://$target;
+	}
+}
+EOF
+    run _rollout_resolve_live_slot "dspace"
+    assert_output "green"
+    run _rollout_resolve_live_slot "dspace-angular"
+    assert_output "blue"
+}
+
+@test "_rollout_vhost_target: 'dspace' le a porta do backend, nunca a do 'dspace-angular'" {
+    cat > "${VHOST_FILE}" <<'EOF'
+server {
+	location / {
+		set $target testproj-dspace-angular.testproj_net:4000;
+		proxy_pass http://$target;
+	}
+	location /server {
+		set $target testproj-dspace.testproj_net:8080;
+		proxy_pass http://$target;
+	}
+}
+EOF
+    run _rollout_vhost_target "${VHOST_FILE}" "testproj-dspace.testproj_net"
+    assert_success
+    assert_output "http 8080"
+}
+
+@test "bluegreen: depois da troca, confere de dentro do proxy que o alvo novo resolve (getent)" {
+    run rollout_bluegreen --service moodle-app
+    assert_success
+    grep -q "exec nginx-proxy getent ahostsv4 testproj-moodle-app-green.testproj_net" "${WORKDIR}/docker.log"
+}
+
+@test "bluegreen: alvo do candidato resolve para OUTRO IP ANTES da troca -> aborta sem tocar no vhost e descarta o candidato" {
+    export GETENT_IP="10.240.9.9"
+
+    run rollout_bluegreen --service moodle-app
+    assert_failure
+    assert_output --partial "10.240.9.9"
+    assert_output --partial "antes de trocar o vhost"
+    grep -q 'set \$target testproj-moodle-app.testproj_net:443;' "${VHOST_FILE}"
+    run grep -q 'testproj-moodle-app-green' "${VHOST_FILE}"
+    assert_failure
+    grep -q "^rm testproj-moodle-app-green" "${WORKDIR}/docker.log"
+    [[ ! -e "${ROLLOUT_STATE_FILE}" ]]
+}
+
+@test "bluegreen: alvo do candidato NAO resolve antes da troca -> rc 1, vhost intocado" {
+    export GETENT_FAIL=1
+
+    run rollout_bluegreen --service moodle-app
+    assert_failure
+    assert_output --partial "NAO resolve"
+    grep -q 'set \$target testproj-moodle-app.testproj_net:443;' "${VHOST_FILE}"
+}
+
+@test "bluegreen: checagem DEPOIS da troca falha -> vhost volta ao slot anterior e candidato e descartado" {
+    export GETENT_BAD_AFTER_FIRST="10.240.9.9"
+
+    run rollout_bluegreen --service moodle-app
+    assert_failure
+    assert_output --partial "apos a troca"
+    assert_output --partial "Vhost revertido: trafego permanece no slot blue"
+    grep -q 'set \$target testproj-moodle-app.testproj_net:443;' "${VHOST_FILE}"
+    grep -q "^rm testproj-moodle-app-green" "${WORKDIR}/docker.log"
+    [[ ! -e "${ROLLOUT_STATE_FILE}" ]]
+}
+
+@test "bluegreen: checagem depois da troca falha E a reversao do vhost tambem -> candidato MANTIDO, rc 1, instrucao manual" {
+    export GETENT_BAD_AFTER_FIRST="10.240.9.9"
+    # a 2a troca de vhost (a reversao) falha
+    _rollout_switch_vhost() {
+        local n=0
+        [[ -f "${WORKDIR}/switch.count" ]] && n=$(cat "${WORKDIR}/switch.count")
+        n=$((n+1)); echo "${n}" > "${WORKDIR}/switch.count"
+        (( n >= 2 )) && return 1
+        vhost_switch_target "$@"
+    }
+
+    run rollout_bluegreen --service moodle-app
+    assert_failure
+    assert_output --partial "FALHA AO REVERTER"
+    assert_output --partial "${VHOST_FILE}"
+    assert_output --partial "testproj-moodle-app-green.testproj_net"
+    assert_output --partial "cctl proxy reload"
+    refute_output --partial "trafego permanece no slot"
+    # candidato nao foi derrubado
+    run ! grep -q "^rm testproj-moodle-app-green" "${WORKDIR}/docker.log"
+    run ! grep -q "^stop testproj-moodle-app-green" "${WORKDIR}/docker.log"
+}
+
+@test "bluegreen: alvo que resolve para o IP certo MAIS outro IP -> falha (considera todas as linhas)" {
+    export GETENT_IP="10.240.0.11,10.240.0.77"
+    run rollout_bluegreen --service moodle-app
+    assert_failure
+    assert_output --partial "10.240.0.77"
+}
+
+@test "bluegreen: a conferencia aparece na saida (log_success por alvo)" {
+    run rollout_bluegreen --service moodle-app
+    assert_success
+    assert_output --partial "Alvo testproj-moodle-app-green.testproj_net confere: resolve so para o container testproj-moodle-app-green (10.240.0.11)"
+}
+
+@test "rolling: conecta o nginx-proxy a rede do projeto (como o bluegreen)" {
+    export DOMAIN_NAME="testproj.example.com"
+    run rollout_rolling --service moodle-app
+    assert_success
+    grep -q "network connect --alias testproj.example.com testproj_net nginx-proxy" "${WORKDIR}/docker.log"
+}
+
+@test "_rollout_resolve_live_slot e vhost_switch_target aceitam TAB/varios espacos em 'set \$target'" {
+    printf 'server {\n\tlocation / {\n\t\tset\t$target   testproj-moodle-app-green.testproj_net:443;\n\t\tproxy_pass https://$target;\n\t}\n}\n' > "${VHOST_FILE}"
+    run _rollout_resolve_live_slot "moodle-app"
+    assert_output "green"
+    run _rollout_vhost_target "${VHOST_FILE}" "testproj-moodle-app-green.testproj_net"
+    assert_output "https 443"
+    run _rollout_switch_vhost "${VHOST_FILE}" "testproj-moodle-app-green.testproj_net" "testproj-moodle-app.testproj_net"
+    assert_success
+    grep -qE 'set[[:space:]]+\$target[[:space:]]+testproj-moodle-app.testproj_net:443;' "${VHOST_FILE}"
 }

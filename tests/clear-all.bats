@@ -6,16 +6,20 @@
 # Isolamento: docker/sudo sempre mockados via bin/ temporario no PATH. Nenhum
 # volume, container ou rede real e tocado.
 
+bats_require_minimum_version 1.5.0
+
 setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh core.sh network.sh volumes.sh compose.sh nginx.sh vhost.sh cron.sh
+    source_lib colors.sh log.sh core.sh inventory.sh network.sh volumes.sh compose.sh nginx.sh vhost.sh cron.sh
 
     WORKDIR="$(make_tmp_workdir)"
     cd "${WORKDIR}" || return 1
 
     export COMPOSE_PROJECT_NAME="moodle"
+    export CCTL_INVENTORY_DIR="${WORKDIR}/inventory"
+    unset CCTL_PROJECT_NETWORK
     export CCTL_LOG_DIR="${WORKDIR}/logs"
     export CCTL_LOG_FILE=""
     unset COMPOSE_FILES DOMAIN_NAME 2>/dev/null || true
@@ -108,4 +112,99 @@ teardown() {
         # Caminho esperado: nenhuma chamada de sudo foi feita.
         true
     fi
+}
+
+@test "cmd_clear-all: falha ao remover volume retorna erro agregado, mesmo sem rede" {
+    declare -A CCTL_TEST_VOLS=( [moodle_dbdata]="moodle" )
+    mock_docker_with_volumes CCTL_TEST_VOLS "${WORKDIR}/docker_calls.log"
+    export MOCK_VOLUME_RM_FAIL=1
+
+    run cmd_clear-all <<< "moodle"
+    assert_failure
+    assert_output --partial "Falha ao remover um ou mais volumes"
+    assert_output --partial "nao foi removido completamente"
+}
+
+@test "cmd_clear-all: falha ao remover logrotate retorna erro agregado" {
+    declare -A CCTL_TEST_VOLS=()
+    mock_docker_with_volumes CCTL_TEST_VOLS "${WORKDIR}/docker_calls.log"
+    : > "${LOGROTATE_DIR}/rotate-apache-logs-moodle"
+    core_priv_run() { return 1; }
+
+    run cmd_clear-all <<< "moodle"
+    assert_failure
+    assert_output --partial "Falha ao remover ${LOGROTATE_DIR}/rotate-apache-logs-moodle"
+    assert_output --partial "nao foi removido completamente"
+}
+
+# --- rede do projeto: o clear-all e o unico que a apaga ---------------------
+
+@test "cmd_clear-all: desconecta o proxy, apaga a rede do projeto e limpa NETWORK/SUBNET do inventario" {
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    export CCTL_PROJECT_NETWORK="moodle_net"
+    netsim_add_network "moodle_net" "moodle" "10.240.0.0/24" "moodle.example.com"
+    netsim_connect "moodle_net" "moodle.example.com"
+    # rede de OUTRO projeto, conectada ao proxy: nao pode ser tocada
+    netsim_add_network "moodle-lab_net" "moodle-lab" "10.240.1.0/24" "lab.example.com"
+    netsim_connect "moodle-lab_net" "lab.example.com"
+    inventory_mark_installed "moodle" "moodle" "c" "moodle.example.com" "${WORKDIR}/inst" "moodle_net" "10.240.0.0/24"
+
+    run cmd_clear-all <<< "moodle"
+    assert_success
+
+    grep -q "network disconnect moodle_net nginx-proxy" "${WORKDIR}/docker_calls.log"
+    grep -q "network rm moodle_net" "${WORKDIR}/docker_calls.log"
+    run ! netsim_has_network "moodle_net"
+    run ! netsim_is_connected "moodle_net"
+
+    # a rede do outro projeto continua la e ligada ao proxy
+    run ! grep -q "moodle-lab_net" <(grep -E "network (rm|disconnect)" "${WORKDIR}/docker_calls.log")
+    netsim_has_network "moodle-lab_net"
+    netsim_is_connected "moodle-lab_net"
+
+    inventory_read "moodle"
+    [[ -z "${INV_NETWORK}" && -z "${INV_SUBNET}" ]]
+    [[ "${INV_STATUS}" == "installed" ]]
+}
+
+@test "cmd_clear-all: falha ao limpar reserva em registro existente torna o teardown incompleto" {
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    export CCTL_PROJECT_NETWORK="moodle_net"
+    netsim_add_network "moodle_net" "moodle" "10.240.0.0/24" "moodle.example.com"
+    inventory_mark_installed "moodle" "moodle" "c" "moodle.example.com" "${WORKDIR}/inst" "moodle_net" "10.240.0.0/24"
+    inventory_clear_network() { return 1; }
+
+    run cmd_clear-all <<< "moodle"
+    assert_failure
+    assert_output --partial "falhou a limpeza da reserva"
+    run ! netsim_has_network "moodle_net"
+}
+
+@test "cmd_clear-all: sem CCTL_PROJECT_NETWORK nao procura rede por nome nem apaga nenhuma" {
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    netsim_add_network "moodle_net" "moodle" "10.240.0.0/24"
+
+    run cmd_clear-all <<< "moodle"
+    assert_success
+    assert_output --partial "Nenhuma rede registrada"
+    run ! grep -q "network rm" "${WORKDIR}/docker_calls.log"
+    netsim_has_network "moodle_net"
+}
+
+@test "cmd_clear-all: se o 'network rm' falha, NETWORK/SUBNET continuam no inventario e o aviso diz o que fazer" {
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    export CCTL_PROJECT_NETWORK="moodle_net"
+    netsim_add_network "moodle_net" "moodle" "10.240.0.0/24" "moodle.example.com"
+    netsim_fail_rm
+    inventory_mark_installed "moodle" "moodle" "c" "moodle.example.com" "${WORKDIR}/inst" "moodle_net" "10.240.0.0/24"
+
+    run cmd_clear-all <<< "moodle"
+    assert_failure
+    assert_output --partial "continua existindo"
+    assert_output --partial "nao foi removido completamente"
+    assert_output --partial "docker network rm moodle_net"
+
+    inventory_read "moodle"
+    [[ "${INV_NETWORK}" == "moodle_net" ]]
+    [[ "${INV_SUBNET}" == "10.240.0.0/24" ]]
 }

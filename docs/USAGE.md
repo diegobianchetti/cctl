@@ -68,6 +68,49 @@ O `cctl` detecta automaticamente onde esta sendo executado e libera apenas os co
 
 Cada template tem um `project.conf` que declara tudo sobre o projeto: compose files, variaveis obrigatorias, senhas auto-geradas, configuracao de nginx/cron/SSL, etc. O `cctl` le esse arquivo para saber como operar.
 
+### Rede das instalacoes
+
+Cada projeto instalado tem a **sua propria rede Docker** (`<projeto>_net`), criada pelo `cctl install` antes de subir os containers. Projetos nunca compartilham rede; so o `nginx-proxy` entra na rede de todos. O template nao sabe de range nem de subnet: o compose so usa a rede que o cctl criou (ver `docs/TEMPLATE_GUIDE.md`).
+
+As faixas (subnets) saem de um range global no `cctl.conf`:
+
+```bash
+CCTL_NETWORK_RANGE="10.240.0.0/16"   # de onde o cctl tira as subnets
+CCTL_NETWORK_PREFIX=24              # tamanho de cada uma: 256 projetos de ate 254 hosts
+```
+
+O range **tem de ser privado** (`10.0.0.0/8`, `172.16.0.0/12` ou `192.168.0.0/16`). Uma faixa publica colidiria com enderecos reais da internet (ex.: `172.32.x.x` ja e publico, porque o bloco privado termina em `172.31`). Para mudar o range, edite o `cctl.conf` — nao exporte a variavel so numa invocacao. O range vale para o host inteiro: todos os projetos tiram a faixa do mesmo range, e um range diferente por invocacao faria installs diferentes alocarem de lugares diferentes sem que o resto soubesse. Trocar o range nao move projetos que ja tem rede: so vale para os proximos installs.
+
+**Pre-flight.** O `cctl install` recusa o range, dizendo o que fazer, quando ele:
+- nao esta inteiro dentro de uma faixa privada;
+- se sobrepoe as faixas que o proprio Docker usa para criar redes (`default-address-pools` do `/etc/docker/daemon.json`; sem ele, o default do Docker: `172.17.0.0/16` a `172.31.0.0/16` e `192.168.0.0/16`);
+- se sobrepoe a uma rota do host que nao e de bridge Docker (placa de rede, VPN, libvirt...).
+
+**Escolha da faixa.** O install sugere a proxima faixa livre do range. Ela evita redes Docker de qualquer tamanho, rotas do host e as faixas reservadas por outros projetos (inclusive os parados). Com terminal, Enter aceita; voce tambem pode digitar outra faixa, que passa pelas mesmas regras (dentro do range, tamanho certo, livre) e, se nao passar, o cctl explica o motivo e pergunta de novo. Sem terminal, usa a sugestao. Exemplo:
+
+```
+[REDE] Preparando a rede do projeto...
+  Subnet sugerida para moodle-acme: 10.240.0.0/24
+  Enter aceita; ou digite outra faixa /24 dentro de 10.240.0.0/16: 10.240.7.0/24
+[OK] Rede moodle-acme_net criada (subnet 10.240.7.0/24)
+```
+
+A rede e a faixa ficam gravadas no `.env` (`CCTL_PROJECT_NETWORK` e `COMPOSE_PROJECT_SUBNET` — nao edite) e no inventario.
+
+**Ciclo de vida da rede:**
+
+| Comando | O que acontece com a rede |
+|---------|---------------------------|
+| `cctl install` | cria a rede; se o projeto ja tem uma (reinstall), reaproveita — a subnet nao muda |
+| `cctl down` | **nao** apaga a rede e **nao** desconecta o proxy. A faixa continua reservada enquanto o projeto esta parado |
+| `cctl up` | se a rede existe, segue. Se sumiu, recria com a **mesma** faixa. Se a faixa foi tomada por outra coisa, **recusa** e diz quem a usa — nunca troca a faixa sozinho |
+| `cctl proxy up` | reconecta o proxy a toda rede de projeto em que ele nao esteja (caso o container do proxy tenha sido recriado) |
+| `cctl clear-all` / `cctl destroy` | desconectam o proxy e apagam a rede; a faixa volta a ficar livre |
+
+**Ver e auditar.** `cctl network` mostra a rede do projeto (subnet e containers conectados). `cctl paths` mostra a rede e a subnet de cada instancia do inventario e lista como **divergencia** uma rede do cctl sem instancia no inventario, uma instancia cuja rede nao existe e uma instancia instalada sem rede registrada. Ele so mostra; nao apaga nada (para uma rede orfa que voce nao usa mais: `docker network rm <rede>`).
+
+Instalacoes feitas antes desta mudanca (sem `CCTL_PROJECT_NETWORK` no `.env`) nao sao migradas: `cctl up` avisa e pede para reinstalar (`cctl destroy` e `cctl install`).
+
 ### Placeholders
 
 - **`_PLACEHOLDER_`** (underscores) — usados no `.env.template`, substituidos durante `init` e `install`
@@ -127,28 +170,30 @@ cctl install
 ```
 
 O que acontece (a ordem e a dos passos numerados em `commands/install.sh`):
-1. Limpa rede orfa deixada por uma instalacao/`down` anterior que falhou
-2. Gera senhas automaticas (definidas em `AUTO_PASSWORD_VARS`)
-3. Aloca subnet Docker livre no range configurado
-4. Renderiza templates (nginx, cron) com as variaveis do `.env`
-5. Recarrega o `.env` com as senhas e a subnet ja geradas
-6. Valida pre-requisitos: **sudo, docker, espaco em disco e DNS do `DOMAIN_NAME`**
+1. Gera senhas automaticas (definidas em `AUTO_PASSWORD_VARS`)
+2. Valida pre-requisitos: **sudo, docker, espaco em disco, range de rede e DNS do `DOMAIN_NAME`**
    (dominios `localhost`, `*.local` e `*.test` sao pulados; um dominio que
-   nao resolva — nem por DNS nem por `/etc/hosts` — **aborta o install**)
-7. Pull das imagens do registry
-8. Build condicional (so se algum servico do compose tiver contexto `build:`)
-9. Sobe os containers (`docker compose up -d`)
-10. Emite o certificado SSL (se `HOST_SSL=true`)
-11. Configura nginx no host (se `HOST_NGINX=true`)
-12. Instala cron jobs (se `HOST_CRON=true`)
-13. Executa hook pos-instalacao
-14. Grava `.cctl-instance` (marca como instalado)
+   nao resolva — nem por DNS nem por `/etc/hosts` — **aborta o install**;
+   o range de rede e conferido como descrito em "Rede das instalacoes")
+3. Cria a rede Docker do projeto: reaproveita a que ja existe ou sugere a proxima
+   faixa livre do range (com terminal, voce confirma) e grava `CCTL_PROJECT_NETWORK`
+   e `COMPOSE_PROJECT_SUBNET` no `.env`
+4. Renderiza templates (nginx, cron) com as variaveis do `.env`
+5. Recarrega o `.env` com as senhas e a rede ja geradas
+6. Pull das imagens do registry
+7. Build condicional (so se algum servico do compose tiver contexto `build:`)
+8. Sobe os containers (`docker compose up -d`; a rede do passo 3 ja existe)
+9. Emite o certificado SSL (se `HOST_SSL=true`)
+10. Configura nginx no host (se `HOST_NGINX=true`): so publica o vhost se todo alvo estiver no formato `<container>.<rede>`; depois de publicar, confere de dentro do proxy que cada alvo resolve para o container deste projeto (se nao, o install falha dizendo qual alvo e o que resolveu)
+11. Instala cron jobs (se `HOST_CRON=true`)
+12. Executa hook pos-instalacao
+13. Grava `.cctl-instance` (marca como instalado)
 
 > **Falha de cron, logrotate ou hook interrompe o install.** Antes, esses tres
 > passos so geravam um aviso e o install seguia. Agora, se o cron job nao puder
 > ser instalado em `/etc/cron.d`, se o logrotate nao puder ser instalado, ou se o
 > hook pos-instalacao terminar com erro, o `cctl install` para e mostra a causa.
-> Se isso acontecer depois que os containers ja subiram (passo 9), a instalacao
+> Se isso acontecer depois que os containers ja subiram (passo 8), a instalacao
 > fica pela metade.
 >
 > **Como fica a instalacao pela metade.** Os containers continuam rodando e o
@@ -158,8 +203,8 @@ O que acontece (a ordem e a dos passos numerados em `commands/install.sh`):
 >
 > **Como recuperar.** Corrija a causa e rode `cctl install` de novo no mesmo
 > diretorio. As senhas ja geradas sao mantidas e os volumes (dados) tambem.
-> Mas o install recria os containers (a rede do projeto pode ganhar outra
-> subnet), entao **espere a aplicacao terminar de iniciar antes de rodar de
+> Mas o install recria os containers (a rede e a subnet do projeto sao
+> reaproveitadas), entao **espere a aplicacao terminar de iniciar antes de rodar de
 > novo**. Aplicacoes como o Moodle fazem a instalacao inicial em segundo plano,
 > depois que o container sobe; se os containers forem recriados no meio disso,
 > a instalacao da aplicacao fica incompleta. Para acompanhar:
@@ -204,7 +249,7 @@ Apos instalado, todos os comandos operacionais ficam disponiveis:
 | Comando | Descricao |
 |---------|-----------|
 | `cctl up` | Cria containers e inicia o ambiente |
-| `cctl down` | Remove containers e rede (mantem volumes) |
+| `cctl down` | Remove containers (mantem volumes e rede) |
 | `cctl start` | Inicia containers parados |
 | `cctl stop` | Para containers em execucao |
 | `cctl restart` | Reinicia containers |
@@ -244,7 +289,7 @@ omitido. Disponivel em contexto `instance` e `project`. Modos suportados em
 
 | Comando | Descricao |
 |---------|-----------|
-| `cctl proxy up` | Sobe a infraestrutura do proxy (rede + diretorios + container) |
+| `cctl proxy up` | Sobe a infraestrutura do proxy (rede + diretorios + container) e o reconecta as redes dos projetos |
 | `cctl proxy down` | Para e remove o container do proxy |
 | `cctl proxy reload` | Testa e recarrega a configuracao nginx |
 | `cctl proxy test` | Testa a sintaxe da configuracao (todos os vhosts) |
@@ -288,10 +333,11 @@ em `${CCTL_INVENTORY_DIR}` (por padrão, `${CCTL_INSTANCE_BASE_DIR}/.inventory`)
 
 #### Modelo de slots
 
-- **slot blue**: o container gerenciado pelo `docker compose` normalmente (`${COMPOSE_PROJECT_NAME}-<svc>`, alias de rede `<svc>`).
-- **slot green**: um container paralelo, subido a partir de um override de compose gerado em runtime (`docker-compose.rollout.yaml`, sempre removido ao final — inclusive em erro), com `container_name: ${COMPOSE_PROJECT_NAME}-<svc>-green` e `hostname: <svc>-green` via `extends:` do compose base. O override e gerado no mesmo diretorio do arquivo de `COMPOSE_FILES` que efetivamente **define** o servico (nem sempre o primeiro — ex.: template `dspace`, onde `dspace-angular` esta no segundo arquivo), e o `extends.file` aponta para o basename desse arquivo (nunca um caminho com `/`) porque o `docker compose` resolve `extends.file` relativo ao diretorio do proprio override, nao ao CWD.
+- **slot blue**: o container gerenciado pelo `docker compose` normalmente (`${COMPOSE_PROJECT_NAME}-<svc>`; alvo no vhost: `${COMPOSE_PROJECT_NAME}-<svc>.<rede do projeto>`).
+- **slot green**: um container paralelo, subido a partir de um override de compose gerado em runtime (`docker-compose.rollout.yaml`, sempre removido ao final — inclusive em erro), com `container_name: ${COMPOSE_PROJECT_NAME}-<svc>-green` (alvo no vhost: `${COMPOSE_PROJECT_NAME}-<svc>-green.<rede do projeto>`) e `hostname: <svc>-green` via `extends:` do compose base. O override e gerado no mesmo diretorio do arquivo de `COMPOSE_FILES` que efetivamente **define** o servico (nem sempre o primeiro — ex.: template `dspace`, onde `dspace-angular` esta no segundo arquivo), e o `extends.file` aponta para o basename desse arquivo (nunca um caminho com `/`) porque o `docker compose` resolve `extends.file` relativo ao diretorio do proprio override, nao ao CWD.
 - O slot **live** alterna a cada rollout bem-sucedido. O candidato e sempre o slot que nao esta live.
-- O vhost do nginx usa `resolver 127.0.0.11; set $target <alias>:<porta>; proxy_pass <scheme>://$target;` — o Blue/Green so precisa trocar o alias dessa linha e recarregar o nginx (`nginx -t` + `nginx -s reload`) para mudar o trafego, sem `upstream` estatico.
+- O vhost do nginx usa `resolver 127.0.0.11; set $target <container>.<rede>:<porta>; proxy_pass <scheme>://$target;` (o nome do container qualificado pela rede do projeto: com varios projetos no mesmo host, so ele garante que o proxy fale com o container certo) — o Blue/Green so precisa trocar o alvo dessa linha e recarregar o nginx (`nginx -t` + `nginx -s reload`) para mudar o trafego, sem `upstream` estatico.
+- **Conferencia depois da troca.** Logo apos trocar o alvo, o cctl testa de dentro do proxy (`getent hosts`) que o alvo novo resolve para o IP do container candidato nesta rede. Se nao resolver, ou resolver para outro IP, o cctl tenta voltar o vhost ao slot anterior. Quando a reversao consegue ser aplicada, o candidato e descartado; se ela falhar, o comando falha e mantem o candidato, para nao deixar o trafego em estado ambiguo.
 - **O switch reescreve o vhost VIVO em `NGINX_VHOSTS_DIR` (`${CCTL_BASE_DIR}/nginx-proxy/vhosts.d/<projeto>.conf`, default `/opt/cctl/nginx-proxy/vhosts.d/<projeto>.conf`), nunca o `./nginx/site.conf` da instancia.** O `site.conf` continua sendo apenas o render base gerado pelo `cctl install` — depois do primeiro rollout ele nao reflete mais o slot ativo. `cctl rollout status` (ou a leitura direta do vhost vivo) e a fonte da verdade sobre para onde o trafego esta indo, nunca o `site.conf` da instancia.
 - Estado do rollout (slot live, alvo, imagem, data) fica em `ROLLOUT_STATE_FILE` (default `.cctl-rollout`, na raiz da instancia) — sourceable, mas lido por parsing (nunca dado `source` diretamente pelo cctl). A porta gravada no estado (`LIVE_TARGET`) e sempre a porta do servico/vhost — `--health-port` fica restrito a porta usada pela sonda de saude, que pode divergir.
 
@@ -308,7 +354,7 @@ cctl rollout status
 # Container:      acme-moodle-app-green
 # Status:         running
 # Saude:          healthy
-# Alvo do vhost:  moodle-app-green:443
+# Alvo do vhost:  acme-moodle-app-green.acme_net:443
 # Imagem:         ghcr.io/acme/moodle-app:2.5.1
 # Ultimo rollout: 2026-09-12T21:00:00-03:00
 
@@ -432,7 +478,6 @@ templates/<tipo>/
 | `DB_SERVICE` | Nome do servico de banco | `"dspacedb"` |
 | `DB_TYPE` | Tipo do banco | `"postgresql"` |
 | `CONNECTABLE_SERVICES` | Servicos que aceitam `cctl connect` | `("dspace" "dspacedb")` |
-| `SUBNET_RANGE` | Range para alocacao de subnet | `"10.88.0.0/16"` |
 | `HOOK_POST_INSTALL` | Script pos-install | `"post-install.sh"` |
 
 ---

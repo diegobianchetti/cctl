@@ -4,11 +4,13 @@
 # Isolamento total: nenhum container real, nenhuma porta bindada. `docker` e
 # `sudo` sao sempre mockados via bin/ temporario no PATH (setup_mock_bin).
 
+bats_require_minimum_version 1.5.0
+
 setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh core.sh nginx.sh vhost.sh
+    source_lib colors.sh log.sh core.sh inventory.sh network.sh nginx.sh vhost.sh
     # shellcheck source=/dev/null
     source "${CCTL_ROOT}/commands/proxy.sh"
 
@@ -676,4 +678,38 @@ _mock_docker_proxy() {
     CCTL_CONTEXT="unknown"
     run core_check_command_context "proxy"
     assert_success
+}
+
+# --- nginx_proxy_up: reconexao as redes dos projetos ---------------------------
+
+@test "nginx_proxy_up: reconecta o proxy de verdade a rede gerenciada" {
+    setup_network_env
+    mock_docker_netsim "${WORKDIR}/docker.log"
+    netsim_add_network "app_net" "app" "10.240.0.0/24" "app.example.com"
+
+    run nginx_proxy_up
+    assert_success
+    grep -q "network connect --alias app.example.com app_net nginx-proxy" "${WORKDIR}/docker.log"
+    netsim_is_connected "app_net"
+}
+
+@test "nginx_proxy_up: conexao recusada com proxy existente faz proxy up falhar" {
+    setup_network_env
+    mock_docker_netsim "${WORKDIR}/docker.log"
+    netsim_add_network "app_net" "app" "10.240.0.0/24" "app.example.com"
+    netsim_fail_connect "app_net"
+
+    run nginx_proxy_up
+    assert_failure
+    assert_output --partial "nginx-proxy existe"
+    run ! netsim_is_connected "app_net"
+}
+
+@test "nginx_proxy_up: falha ao subir o container -> rc != 0 e NAO tenta reconectar" {
+    DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="" DOCKER_RUN_FAIL=1 _mock_docker_proxy
+    network_reconnect_proxy() { echo "reconectou" > "${WORKDIR}/reconnect.flag"; }
+
+    run nginx_proxy_up
+    assert_failure
+    [[ ! -e "${WORKDIR}/reconnect.flag" ]]
 }

@@ -18,7 +18,11 @@
 #
 # Campos: PROJECT_NAME, PROJECT_TYPE, CLIENT_NAME, DOMAIN_NAME,
 # INSTANCE_DIR (absoluto), STATUS (prepared|installed), CREATED_AT,
-# UPDATED_AT.
+# UPDATED_AT, NETWORK e SUBNET. NETWORK/SUBNET (rede Docker do projeto e a
+# faixa dela) ficam vazios ate o install criar a rede; enquanto preenchidos,
+# a faixa conta como reservada (o alocador de lib/network.sh nao a entrega a
+# outro projeto, mesmo com o projeto parado). Registros antigos, sem essas
+# duas linhas, continuam validos e sao lidos como vazios.
 #
 # Garantia de escrita: o conteudo e criado em temp-file e copiado para um
 # temporario no MESMO diretorio do destino; somente entao ocorre o rename
@@ -84,10 +88,11 @@ _inventory_sanitize_field() {
     printf '%s' "${v}"
 }
 
-# Monta o conteudo de um registro (8 linhas "KEY<TAB>VALUE").
+# Monta o conteudo de um registro (10 linhas "KEY<TAB>VALUE").
 _inventory_record_content() {
     local project_name="$1" project_type="$2" client_name="$3" domain_name="$4"
     local instance_dir="$5" status="$6" created_at="$7" updated_at="$8"
+    local network="${9:-}" subnet="${10:-}"
 
     printf 'PROJECT_NAME\t%s\n' "${project_name}"
     printf 'PROJECT_TYPE\t%s\n' "${project_type}"
@@ -97,6 +102,8 @@ _inventory_record_content() {
     printf 'STATUS\t%s\n' "${status}"
     printf 'CREATED_AT\t%s\n' "${created_at}"
     printf 'UPDATED_AT\t%s\n' "${updated_at}"
+    printf 'NETWORK\t%s\n' "${network}"
+    printf 'SUBNET\t%s\n' "${subnet}"
 }
 
 # Escreve <content> em <dst> via temp-file + rename atomico (core_priv_run
@@ -152,7 +159,7 @@ _inventory_write_atomic() {
 #
 # Le o registro e preenche as variaveis globais INV_* (PROJECT_NAME,
 # PROJECT_TYPE, CLIENT_NAME, DOMAIN_NAME, INSTANCE_DIR, STATUS, CREATED_AT,
-# UPDATED_AT). Nunca sourcea o arquivo — le linha a linha.
+# UPDATED_AT, NETWORK, SUBNET). Nunca sourcea o arquivo — le linha a linha.
 #
 # Retorno:
 #   0  registro lido e com os campos minimos presentes
@@ -168,6 +175,7 @@ inventory_read() {
 
     INV_PROJECT_NAME="" INV_PROJECT_TYPE="" INV_CLIENT_NAME="" INV_DOMAIN_NAME=""
     INV_INSTANCE_DIR="" INV_STATUS="" INV_CREATED_AT="" INV_UPDATED_AT=""
+    INV_NETWORK="" INV_SUBNET=""
 
     local key value
     while IFS=$'\t' read -r key value; do
@@ -180,6 +188,8 @@ inventory_read() {
             STATUS)        INV_STATUS="${value}" ;;
             CREATED_AT)    INV_CREATED_AT="${value}" ;;
             UPDATED_AT)    INV_UPDATED_AT="${value}" ;;
+            NETWORK)       INV_NETWORK="${value}" ;;
+            SUBNET)        INV_SUBNET="${value}" ;;
         esac
     done < "${file}"
 
@@ -190,10 +200,12 @@ inventory_read() {
     return 0
 }
 
-# inventory_upsert <project_name> <project_type> <client_name> <domain_name> <instance_dir> <status>
+# inventory_upsert <project_name> <project_type> <client_name> <domain_name> <instance_dir> <status> [network subnet]
 #
 # Cria ou atualiza o registro. CREATED_AT e preservado em atualizacao;
-# UPDATED_AT e sempre o momento da chamada.
+# UPDATED_AT e sempre o momento da chamada. NETWORK e SUBNET (7o e 8o
+# argumentos) sao PRESERVADOS quando nao informados; informados (mesmo vazios)
+# substituem o valor gravado — e assim que o clear-all limpa a reserva.
 #
 # Falha SEM escrever (registro anterior, se havia, fica intocado) quando:
 #   - project_name ou instance_dir vazios;
@@ -209,6 +221,13 @@ inventory_read() {
 inventory_upsert() {
     local project_name="$1" project_type="$2" client_name="$3" domain_name="$4"
     local instance_dir="$5" status="$6"
+    local network="" subnet=""
+    local keep_network=true
+    if [[ $# -ge 8 ]]; then
+        network="$7"
+        subnet="$8"
+        keep_network=false
+    fi
 
     _inventory_validate_project_name "${project_name}" || return 1
 
@@ -255,6 +274,10 @@ inventory_upsert() {
                 fi
             fi
             created_at="${INV_CREATED_AT:-${now}}"
+            if [[ "${keep_network}" == "true" ]]; then
+                network="${INV_NETWORK}"
+                subnet="${INV_SUBNET}"
+            fi
         else
             log_warn "Registro de inventario existente para '${project_name}' esta corrompido (${file}) — sobrescrevendo."
         fi
@@ -264,9 +287,11 @@ inventory_upsert() {
     client_name="$(_inventory_sanitize_field "${client_name}")"
     domain_name="$(_inventory_sanitize_field "${domain_name}")"
     instance_dir="$(_inventory_sanitize_field "${instance_dir}")"
+    network="$(_inventory_sanitize_field "${network}")"
+    subnet="$(_inventory_sanitize_field "${subnet}")"
 
     local content
-    content="$(_inventory_record_content "${project_name}" "${project_type}" "${client_name}" "${domain_name}" "${instance_dir}" "${status}" "${created_at}" "${now}")"
+    content="$(_inventory_record_content "${project_name}" "${project_type}" "${client_name}" "${domain_name}" "${instance_dir}" "${status}" "${created_at}" "${now}" "${network}" "${subnet}")"
 
     _inventory_write_atomic "${file}" "${content}"
 }
@@ -278,14 +303,34 @@ inventory_mark_prepared() {
     inventory_upsert "$1" "$2" "$3" "$4" "$5" "prepared"
 }
 
-# inventory_mark_installed <project_name> <project_type> <client_name> <domain_name> <instance_dir>
+# inventory_mark_installed <project_name> <project_type> <client_name> <domain_name> <instance_dir> [network subnet]
 #
 # Usado por `cctl install` depois de escrever .cctl-instance. Se nao havia
 # registro "prepared" prévio para este project_name/instance_dir (projeto
 # nunca passou por `cctl init`, ou inventario anterior a F2.4), cria um novo
 # registro direto em installed — "adota" a instancia.
 inventory_mark_installed() {
-    inventory_upsert "$1" "$2" "$3" "$4" "$5" "installed"
+    inventory_upsert "$1" "$2" "$3" "$4" "$5" "installed" "${@:6}"
+}
+
+# inventory_set_network <project_name> <network> <subnet>
+#
+# Grava a rede e a faixa do projeto num registro JA existente (reserva a
+# faixa contra outros installs). Retorna 1, sem criar nada, se nao houver
+# registro legivel — quem instala sem registro previo passa a rede para
+# inventory_mark_installed no fim do install. Tudo o mais no registro fica
+# como estava.
+inventory_set_network() {
+    local project_name="$1" network="$2" subnet="$3"
+    inventory_read "${project_name}" || return 1
+    inventory_upsert "${INV_PROJECT_NAME}" "${INV_PROJECT_TYPE}" "${INV_CLIENT_NAME}" \
+        "${INV_DOMAIN_NAME}" "${INV_INSTANCE_DIR}" "${INV_STATUS}" "${network}" "${subnet}"
+}
+
+# inventory_clear_network <project_name> — limpa NETWORK/SUBNET (a faixa
+# deixa de estar reservada). Usado pelo clear-all depois de apagar a rede.
+inventory_clear_network() {
+    inventory_set_network "$1" "" ""
 }
 
 # inventory_remove <project_name>
@@ -362,4 +407,48 @@ inventory_list() {
             "${INV_DOMAIN_NAME}" "${INV_INSTANCE_DIR}" "${INV_STATUS}" \
             "${state}" "${INV_CREATED_AT}" "${INV_UPDATED_AT}"
     done
+}
+
+# inventory_network_list
+#
+# Uma linha TSV por registro legivel: NAME  STATUS  NETWORK  SUBNET (os dois
+# ultimos vazios quando o projeto ainda nao tem rede). E a visao que o
+# alocador de faixas (reservas) e o `cctl paths` (divergencias) consomem —
+# separada de inventory_list para nao mudar o contrato de colunas do
+# `cctl list`. Registro ilegivel e pulado em silencio (inventory_list ja o
+# denuncia).
+inventory_network_list() {
+    [[ -d "${CCTL_INVENTORY_DIR}" ]] || return 0
+
+    local file base project_name
+    for file in "${CCTL_INVENTORY_DIR}"/*.tsv; do
+        [[ -f "${file}" ]] || continue
+        base="$(basename "${file}")"
+        project_name="${base%.tsv}"
+
+        inventory_read "${project_name}" || continue
+        printf '%s\t%s\t%s\t%s\n' "${INV_PROJECT_NAME}" "${INV_STATUS}" "${INV_NETWORK}" "${INV_SUBNET}"
+    done
+}
+
+# inventory_domain_for_network <rede>
+#
+# Dominio (DOMAIN_NAME) do projeto que registrou essa rede; vazio/rc 1 se
+# nenhum registro a tem. E a fonte do alias do proxy em `cctl proxy up`.
+inventory_domain_for_network() {
+    local net="$1"
+    [[ -n "${net}" && -d "${CCTL_INVENTORY_DIR}" ]] || return 1
+
+    local file project_name
+    for file in "${CCTL_INVENTORY_DIR}"/*.tsv; do
+        [[ -f "${file}" ]] || continue
+        project_name="$(basename "${file}")"
+        project_name="${project_name%.tsv}"
+        inventory_read "${project_name}" || continue
+        if [[ "${INV_NETWORK}" == "${net}" && -n "${INV_DOMAIN_NAME}" ]]; then
+            printf '%s\n' "${INV_DOMAIN_NAME}"
+            return 0
+        fi
+    done
+    return 1
 }

@@ -2,11 +2,11 @@
 # lib/volumes.sh — Listar e limpar volumes Docker do projeto
 
 # Lista os nomes dos volumes Docker do projeto (usado por volumes_list,
-# volumes_clear, clear-all, status e backup). Mesma estrategia de
-# network_list_for_project (lib/network.sh): o filtro "name=" do
+# volumes_clear, clear-all, status e backup). O filtro "name=" do
 # `docker volume ls` faz match por SUBSTRING (nao aceita "^" de ancora), o
 # que faz um projeto "moodle" tambem casar volumes de "moodle-lab" — colisao
-# da mesma classe do bug B1 de redes.
+# conhecida como bug B1 (antes tambem afetava a busca de redes, que hoje usa
+# CCTL_PROJECT_NETWORK do .env e nao procura mais por nome).
 #
 # UNIAO, nao fallback condicional: um recurso rotulado pelo compose (label
 # exato) E um recurso orfao/recriado a mao sem label (mesmo prefixo

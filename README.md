@@ -47,6 +47,51 @@ embutido no README).
 - [nginx-proxy](https://github.com/diegobianchetti/nginx-proxy) em execução
   (necessário para `cctl install`)
 
+### Rede das instalações
+
+Cada projeto instalado tem a **sua própria rede Docker** (`<projeto>_net`).
+Projetos nunca compartilham rede; o único container que entra na rede de
+todos é o `nginx-proxy`. As faixas (subnets) saem de um range global no
+`cctl.conf`:
+
+```bash
+CCTL_NETWORK_RANGE="10.240.0.0/16"   # de onde o cctl tira as subnets
+CCTL_NETWORK_PREFIX=24              # tamanho de cada uma: 256 projetos de até 254 hosts
+```
+
+O range **tem de ser privado** (`10.0.0.0/8`, `172.16.0.0/12` ou
+`192.168.0.0/16`): uma faixa pública colidiria com endereços reais da
+internet. O `cctl install` recusa, antes de criar qualquer coisa, um range
+público, que se sobreponha às faixas que o próprio Docker usa para criar redes
+(`default-address-pools` do `/etc/docker/daemon.json`, ou o default do Docker)
+ou a uma rota do host (LAN, VPN).
+
+No `install`, o cctl **sugere a próxima faixa livre** (ele enxerga redes
+Docker de qualquer tamanho, rotas do host e as faixas de projetos parados).
+Num terminal, Enter aceita a sugestão ou você digita outra faixa, que é
+validada; sem terminal (automação), usa a sugestão:
+
+```
+[REDE] Preparando a rede do projeto...
+  Subnet sugerida para moodle-acme: 10.240.0.0/24
+  Enter aceita; ou digite outra faixa /24 dentro de 10.240.0.0/16:
+[OK] Rede moodle-acme_net criada (subnet 10.240.0.0/24)
+```
+
+O que acontece depois:
+
+| Comando | Efeito na rede |
+|---------|----------------|
+| `cctl install` | cria a rede (ou reaproveita a que o projeto já tem: reinstalar não troca a subnet) |
+| `cctl down` | **não** apaga a rede nem desconecta o proxy — a faixa continua reservada com o projeto parado |
+| `cctl up` | se a rede sumiu, recria com a **mesma** faixa; se outra coisa tomou a faixa, recusa e diz quem a usa (nunca troca a faixa sozinho) |
+| `cctl proxy up` | reconecta o proxy a todas as redes de projeto (útil se o container do proxy foi recriado) |
+| `cctl clear-all` / `destroy` | apagam a rede do projeto e liberam a faixa |
+
+`cctl paths` mostra a rede e a subnet de cada instância e lista como
+divergência qualquer rede do cctl sem instância no inventário (e instância cuja
+rede não existe). Só mostra — não apaga nada.
+
 ### Onde o `cctl` grava dados
 
 Tudo fica sob uma raiz única, `CCTL_BASE_DIR` (default `/opt/cctl`,
@@ -145,8 +190,9 @@ vi docker/.env
 cctl install
 ```
 
-O `install` gera as senhas, aloca uma subnet dedicada, sobe os containers,
-instala os cron jobs e registra o vhost no nginx-proxy.
+O `install` gera as senhas, cria a rede Docker dedicada do projeto (sugerindo
+a próxima faixa livre — veja [Rede das instalações](#rede-das-instalações)),
+sobe os containers, instala os cron jobs e registra o vhost no nginx-proxy.
 
 ### 3. Operações
 
@@ -287,7 +333,7 @@ vagrant destroy -f
 | `init <template> <nome>` | Inicializa diretório de projeto a partir de um template |
 | `install` | Instala a instância no servidor |
 | `up` | Cria containers e inicia o ambiente |
-| `down` | Remove containers e rede (mantém volumes) |
+| `down` | Remove containers (mantém volumes e rede) |
 | `start` | Inicia containers parados |
 | `stop` | Para containers em execução |
 | `restart` | Reinicia containers |

@@ -1,8 +1,11 @@
 ## docker-compose.frontend.yaml — DSpace Angular (UI)
 ## Gerenciado pelo cctl — nao editar manualmente
 
+# Mesma rede do docker-compose.yaml (criada pelo cctl; ver la).
 networks:
   dspacenet:
+    external: true
+    name: ${CCTL_PROJECT_NETWORK}
 
 services:
   dspace-angular:
