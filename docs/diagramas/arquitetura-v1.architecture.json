@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "cctl v1 — um host, um nginx, N projetos",
+    "output": "docs/diagramas/arquitetura-v1.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "n-projetos",
+        "label": "N projetos, um nginx",
+        "focus": ["proxy", "app", "db", "cctl"],
+        "note": "O Moodle é UMA unidade fina entre N. Outro template entra com o mesmo contrato, e o cctl administra todas as instâncias."
+      },
+      {
+        "id": "certificado",
+        "label": "Certificado: um só destino",
+        "focus": ["certbot", "certs", "proxy"],
+        "note": "certbot e a cron de renew rodam DENTRO do container e escrevem num único ponto RW, que também recebe o autoassinado e o pago."
+      },
+      {
+        "id": "requisicao",
+        "label": "Caminho da requisição",
+        "focus": ["clients", "proxy", "app", "db"],
+        "note": "O tráfego externo termina no nginx compartilhado e chega ao projeto pela rede interna; app e banco não publicam porta."
+      }
+    ]
+  },
+  "components": [
+    { "id": "certbot", "type": "backend", "label": "certbot + crond", "sublabel": "emite e renova via ACME", "pos": [230, 180], "size": [160, 62], "tag": "dentro do container" },
+    { "id": "certs", "type": "database", "label": "certs/ → /etc/letsencrypt", "sublabel": "RW · os 3 tipos de certificado", "pos": [560, 180], "size": [216, 62] },
+    { "id": "clients", "type": "external", "label": "Navegador", "sublabel": "cliente do projeto", "pos": [20, 380], "size": [118, 58] },
+    { "id": "proxy", "type": "security", "label": "nginx-proxy", "sublabel": "borda :80 :443", "pos": [230, 380], "size": [160, 66], "tag": "compartilhado" },
+    { "id": "app", "type": "backend", "label": "moodle-app", "sublabel": "sem porta no host", "pos": [700, 380], "size": [148, 64] },
+    { "id": "db", "type": "database", "label": "moodle-db", "sublabel": "só na rede interna", "pos": [910, 380], "size": [148, 64] },
+    { "id": "system", "type": "cloud", "label": "/etc/cron.d · /etc/logrotate.d", "sublabel": "única escrita fora da raiz · root", "pos": [560, 560], "size": [252, 62] },
+    { "id": "cctl", "type": "backend", "label": "cctl", "sublabel": "administra, não serve tráfego", "pos": [230, 560], "size": [160, 66], "tag": "no host" }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "HOST — Ubuntu + Docker CE",
+      "wraps": ["cctl", "certbot", "proxy", "certs", "app", "db", "system"],
+      "pad": 28
+    },
+    {
+      "kind": "security-group",
+      "label": "container nginx-proxy",
+      "wraps": ["certbot", "proxy"],
+      "pad": 18
+    },
+    {
+      "kind": "security-group",
+      "label": "instância do projeto (Moodle)",
+      "wraps": ["app", "db"],
+      "pad": 18
+    }
+  ],
+  "connections": [
+    { "from": "clients", "to": "proxy", "label": "HTTPS 443", "variant": "emphasis" },
+    { "from": "proxy", "to": "app", "label": "proxy_pass" },
+    { "from": "app", "to": "db", "label": "SQL 5432" },
+    { "from": "cctl", "to": "proxy", "label": "ciclo de vida do proxy" },
+    { "from": "cctl", "to": "app", "label": "instala e opera a stack" },
+    { "from": "cctl", "to": "system", "label": "instala cron e logrotate", "labelDy": 24 },
+    { "from": "certbot", "to": "certs", "label": "emite e renova" },
+    { "from": "certs", "to": "proxy", "label": "lê certificado", "variant": "dashed", "toSide": "top" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Um host, um nginx",
+      "items": [
+        "A borda é compartilhada: TLS e roteamento de todos os projetos do host",
+        "um projeto é unidade fina — e vale para N projetos diferentes entre si",
+        "o Moodle é só o primeiro template; dspace, gitlab e harbor entram com o mesmo contrato"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Donos únicos",
+      "items": [
+        "cctl é o único escritor do vhost — install e rollout usam a mesma via",
+        "certbot e a cron de renew vivem dentro do container, não no host",
+        "cctl instala o autoassinado e o pago no mesmo ponto que o certbot usa"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "O que isso corrige",
+      "items": [
+        "A renovação passa a existir — hoje nenhum cron a agenda",
+        "O host deixa de precisar de certbot instalado",
+        "O certificado pago e o autoassinado caem no mesmo lugar do Let's Encrypt"
+      ]
+    }
+  ]
+}

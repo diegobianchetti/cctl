@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "visual-check",
+  "evidenceKind": "automated-browser",
+  "status": "fail",
+  "visualReview": "pending",
+  "artifact": {
+    "path": "/home/diego/oogway/opensource/cctl/docs/diagramas/arquitetura-v1.html",
+    "sha256": "1855128452a730a86be91f3d163fd9da27e35862e9285bf90b1816f64db6feb9",
+    "bytes": 807350
+  },
+  "state": {
+    "detail": "read",
+    "motion": "still"
+  },
+  "chrome": {
+    "status": "available",
+    "executable": "/usr/bin/google-chrome"
+  },
+  "diagnostics": [
+    {
+      "code": "viewer/visual-check-runtime",
+      "severity": "error",
+      "message": "visual-check could not complete its Chrome inspection.",
+      "subject": {
+        "artifact": "/home/diego/oogway/opensource/cctl/docs/diagramas/arquitetura-v1.html"
+      },
+      "evidence": {
+        "reason": "Chrome DevTools write pipe failed: read ECONNRESET [ECONNRESET]\nChrome process: signal SIGABRT.\nChrome stderr:\n[12:12:0914/112007.307345:ERROR:third_party/crashpad/crashpad/util/file/file_io_posix.cc:208] open /home/diego/.config/google-chrome/Crash Reports/settings.dat: Read-only file system (30)\n[12:12:0914/112007.307420:ERROR:third_party/crashpad/crashpad/util/file/file_io_posix.cc:208] open /home/diego/.config/google-chrome/Crash Reports/settings.dat: Read-only file system (30)\n[12:12:0914/112007.309054:FATAL:sandbox/linux/suid/client/setuid_sandbox_host.cc:166] The SUID sandbox helper binary was found, but is not configured correctly. Rather than run without sandboxing I'm aborting now. You need to make sure that /opt/google/chrome/chrome-sandbox is owned by root and has mode 4755.\n[0914/112007.313187:ERROR:third_party/crashpad/crashpad/util/file/file_io_posix.cc:208] open /home/diego/.config/google-chrome/Crash Reports/settings.dat: Read-only file system (30)\n[0914/112007.313242:ERROR:third_party/crashpad/crashpad/util/file/file_io_posix.cc:153] open /home/diego/.config/google-chrome/Crash Reports/new/d39dfce6-5750-40c2-b952-7d2119bc0127.dmp: Read-only file system (30)\n[0914/112007.313248:ERROR:third_party/crashpad/crashpad/handler/linux/crash_report_exception_handler.cc:209] PrepareNewCrashReport failed"
+      },
+      "supportedFixes": [
+        "resolve the reported Chrome inspection error, then rerun visual-check"
+      ]
+    }
+  ],
+  "containment": {
+    "status": "fail",
+    "viewports": []
+  },
+  "readability": {
+    "status": "fail",
+    "minimumProjectedNodeTextPx": 6,
+    "viewports": []
+  },
+  "viewerChrome": {
+    "status": "fail",
+    "viewports": []
+  },
+  "captures": {
+    "status": "fail",
+    "screenshots": [],
+    "contactSheet": null
+  },
+  "sidecars": {
+    "receipt": "arquitetura-v1.visual-check.json",
+    "contactSheet": "arquitetura-v1.visual-check.html"
+  },
+  "error": "Chrome DevTools write pipe failed: read ECONNRESET [ECONNRESET]\nChrome process: signal SIGABRT.\nChrome stderr:\n[12:12:0914/112007.307345:ERROR:third_party/crashpad/crashpad/util/file/file_io_posix.cc:208] open /home/diego/.config/google-chrome/Crash Reports/settings.dat: Read-only file system (30)\n[12:12:0914/112007.307420:ERROR:third_party/crashpad/crashpad/util/file/file_io_posix.cc:208] open /home/diego/.config/google-chrome/Crash Reports/settings.dat: Read-only file system (30)\n[12:12:0914/112007.309054:FATAL:sandbox/linux/suid/client/setuid_sandbox_host.cc:166] The SUID sandbox helper binary was found, but is not configured correctly. Rather than run without sandboxing I'm aborting now. You need to make sure that /opt/google/chrome/chrome-sandbox is owned by root and has mode 4755.\n[0914/112007.313187:ERROR:third_party/crashpad/crashpad/util/file/file_io_posix.cc:208] open /home/diego/.config/google-chrome/Crash Reports/settings.dat: Read-only file system (30)\n[0914/112007.313242:ERROR:third_party/crashpad/crashpad/util/file/file_io_posix.cc:153] open /home/diego/.config/google-chrome/Crash Reports/new/d39dfce6-5750-40c2-b952-7d2119bc0127.dmp: Read-only file system (30)\n[0914/112007.313248:ERROR:third_party/crashpad/crashpad/handler/linux/crash_report_exception_handler.cc:209] PrepareNewCrashReport failed"
+}
