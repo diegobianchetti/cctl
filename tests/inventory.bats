@@ -143,13 +143,14 @@ teardown() {
     run inventory_mark_prepared "app1" "moodle" $'cliente\tcom\ttab' $'dominio\ncom\nnewline' "${WORKDIR}/instances/app1"
     assert_success
 
-    # exatamente 8 campos reconhecidos — nenhum tab/newline do valor
-    # sanitizado injetou uma 9a linha ou quebrou uma chave em duas.
+    # exatamente 10 campos reconhecidos (8 + NETWORK/SUBNET) — nenhum
+    # tab/newline do valor sanitizado injetou uma 11a linha ou quebrou uma
+    # chave em duas.
     # Pattern com tab literal via $'...' (bash expande \t antes do grep
     # ver o argumento) — -E deste host (ugrep) nao interpreta \t como
     # escape de regex.
     run grep -cE $'^[A-Z_]+\t' "${CCTL_INVENTORY_DIR}/app1.tsv"
-    assert_output "8"
+    assert_output "10"
 
     inventory_read "app1"
     assert_success
@@ -251,4 +252,92 @@ teardown() {
     assert_output --partial "corrupted"
     assert_output --partial "app-ok"
     assert_output --partial $'\tok'
+}
+
+# --- NETWORK / SUBNET (rede do projeto) ---------------------------------------
+
+@test "inventory: registro novo nasce com NETWORK e SUBNET vazios" {
+    inventory_mark_prepared "app1" "moodle" "c" "app1.example.com" "${WORKDIR}/instances/app1"
+    inventory_read "app1"
+    [[ -z "${INV_NETWORK}" && -z "${INV_SUBNET}" ]]
+}
+
+@test "inventory_set_network: grava rede e faixa sem mexer no resto do registro" {
+    inventory_mark_prepared "app1" "moodle" "cli" "app1.example.com" "${WORKDIR}/instances/app1"
+    inventory_read "app1"
+    local created="${INV_CREATED_AT}"
+
+    run inventory_set_network "app1" "app1_net" "10.240.3.0/24"
+    assert_success
+
+    inventory_read "app1"
+    [[ "${INV_NETWORK}" == "app1_net" ]]
+    [[ "${INV_SUBNET}" == "10.240.3.0/24" ]]
+    [[ "${INV_STATUS}" == "prepared" ]]
+    [[ "${INV_CLIENT_NAME}" == "cli" ]]
+    [[ "${INV_DOMAIN_NAME}" == "app1.example.com" ]]
+    [[ "${INV_CREATED_AT}" == "${created}" ]]
+}
+
+@test "inventory_set_network: sem registro previo -> rc 1 e nada e criado" {
+    run inventory_set_network "naoexiste" "x_net" "10.240.3.0/24"
+    assert_failure
+    [[ ! -e "${CCTL_INVENTORY_DIR}/naoexiste.tsv" ]]
+}
+
+@test "inventory: mark_installed e mark_prepared PRESERVAM a rede ja gravada" {
+    inventory_mark_prepared "app1" "moodle" "c" "app1.example.com" "${WORKDIR}/instances/app1"
+    inventory_set_network "app1" "app1_net" "10.240.3.0/24"
+
+    inventory_mark_installed "app1" "moodle" "c" "app1.example.com" "${WORKDIR}/instances/app1"
+    inventory_read "app1"
+    [[ "${INV_STATUS}" == "installed" ]]
+    [[ "${INV_NETWORK}" == "app1_net" ]]
+    [[ "${INV_SUBNET}" == "10.240.3.0/24" ]]
+}
+
+@test "inventory_mark_installed: rede informada no 6o/7o argumento e gravada (adocao sem registro previo)" {
+    inventory_mark_installed "app1" "moodle" "c" "app1.example.com" "${WORKDIR}/instances/app1" "app1_net" "10.240.3.0/24"
+    inventory_read "app1"
+    [[ "${INV_NETWORK}" == "app1_net" ]]
+    [[ "${INV_SUBNET}" == "10.240.3.0/24" ]]
+}
+
+@test "inventory_clear_network: limpa NETWORK/SUBNET e mantem o registro" {
+    inventory_mark_installed "app1" "moodle" "c" "app1.example.com" "${WORKDIR}/instances/app1" "app1_net" "10.240.3.0/24"
+
+    run inventory_clear_network "app1"
+    assert_success
+    inventory_read "app1"
+    [[ -z "${INV_NETWORK}" && -z "${INV_SUBNET}" ]]
+    [[ "${INV_STATUS}" == "installed" ]]
+}
+
+@test "inventory_read: registro antigo (sem as linhas NETWORK/SUBNET) continua valido, com campos vazios" {
+    mkdir -p "${CCTL_INVENTORY_DIR}"
+    printf 'PROJECT_NAME\told\nPROJECT_TYPE\tmoodle\nCLIENT_NAME\tc\nDOMAIN_NAME\td.example.com\nINSTANCE_DIR\t%s\nSTATUS\tinstalled\nCREATED_AT\tx\nUPDATED_AT\ty\n' \
+        "${WORKDIR}/instances/old" > "${CCTL_INVENTORY_DIR}/old.tsv"
+
+    run inventory_read "old"
+    assert_success
+    inventory_read "old"
+    [[ -z "${INV_NETWORK}" && -z "${INV_SUBNET}" ]]
+}
+
+@test "inventory_network_list: NAME STATUS NETWORK SUBNET por registro; lista nao muda o contrato do inventory_list" {
+    inventory_mark_installed "aa" "moodle" "c" "aa.example.com" "${WORKDIR}/i/aa" "aa_net" "10.240.0.0/24"
+    inventory_mark_prepared "bb" "moodle" "c" "bb.example.com" "${WORKDIR}/i/bb"
+
+    run inventory_network_list
+    assert_success
+    assert_line $'aa\tinstalled\taa_net\t10.240.0.0/24'
+    assert_line $'bb\tprepared\t\t'
+
+    # inventory_list continua com 9 colunas
+    run inventory_list
+    assert_success
+    local first
+    # (stderr vem junto no output do `run`: pega so uma linha de dados TSV)
+    first="$(grep -m1 $'\t' <<< "${output}")"
+    [[ "$(awk -F'\t' '{print NF}' <<< "${first}")" -eq 9 ]]
 }

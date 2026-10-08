@@ -52,7 +52,7 @@ _help_instance_commands() {
     echo ""
     echo -e "  ${CYAN}Ciclo de vida:${RESET}"
     echo "  up                  Cria containers e inicia o ambiente"
-    echo "  down                Remove containers e rede (mantem volumes)"
+    echo "  down                Remove containers (mantem volumes e rede)"
     echo "  start               Inicia containers parados"
     echo "  stop                Para containers em execucao"
     echo "  restart             Reinicia containers"

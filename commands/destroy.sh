@@ -24,7 +24,10 @@ cmd_destroy() {
 
     # Executa clear-all
     source "${CCTL_ROOT}/commands/clear-all.sh"
-    cmd_clear-all
+    if ! cmd_clear-all; then
+        msg_error "Destroy interrompido: o teardown nao terminou. Diretorio e registro do inventario foram preservados para voce retomar a limpeza."
+        return 1
+    fi
 
     # Remove o diretorio da instancia
     msg_step "DESTROY" "Removendo diretorio da instancia..."

@@ -22,6 +22,7 @@ setup() {
     # Inventario isolado dentro do WORKDIR — F2.4: _install_write_instance_file
     # chama inventory_mark_installed depois de gravar .cctl-instance.
     export CCTL_INVENTORY_DIR="${WORKDIR}/inventory"
+    export NGINX_CONTAINER_NAME="nginx-proxy"
 
     export NGINX_VHOSTS_DIR="${WORKDIR}/vhosts"
     mkdir -p "${NGINX_VHOSTS_DIR}"
@@ -29,6 +30,9 @@ setup() {
 
     # sudo mockado: registra chamada e executa o comando real por baixo
     mock_sudo_passthrough
+    # range de rede deterministico, sem rotas do host (o pre-flight do install
+    # confere o range)
+    setup_network_env
     # docker sempre sucesso (nginx -t / -s reload / inspect / network ls)
     mock_cmd docker 'exit 0'
 }
@@ -175,51 +179,73 @@ EOF
 }
 
 # ============================================================
-# _install_cleanup_orphan_network (P2: recuperacao de rede orfa)
+# Rede do projeto no install (_install_ensure_network / _install_connect_proxy)
 # ============================================================
 
-@test "_install_cleanup_orphan_network: desconecta o proxy e remove rede orfa antes de recriar" {
-    export COMPOSE_PROJECT_NAME="app"
+@test "_install_ensure_network: cria <projeto>_net e grava CCTL_PROJECT_NETWORK/COMPOSE_PROJECT_SUBNET no .env" {
+    export COMPOSE_PROJECT_NAME="app" DOMAIN_NAME="app.example.com"
+    unset ENV_FILE CCTL_PROJECT_NETWORK COMPOSE_PROJECT_SUBNET
+    : > .env
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
 
-    declare -A CCTL_TEST_NETS=( [app_network]="app" )
-    mock_docker_with_networks CCTL_TEST_NETS "${WORKDIR}/docker_calls.log"
-
-    run _install_cleanup_orphan_network
+    run _install_ensure_network < /dev/null
     assert_success
-    run cat "${WORKDIR}/docker_calls.log"
-    assert_output --partial "network disconnect app_network nginx-proxy"
-    assert_output --partial "network rm app_network"
+    netsim_has_network "app_net"
+    grep -q "^CCTL_PROJECT_NETWORK=app_net$" .env
+    grep -q "^COMPOSE_PROJECT_SUBNET=10.240.0.0/24$" .env
 }
 
-@test "_install_cleanup_orphan_network: sem rede orfa nao chama disconnect/rm" {
-    export COMPOSE_PROJECT_NAME="app"
+@test "_install_connect_proxy: liga o proxy a CCTL_PROJECT_NETWORK com alias = DOMAIN_NAME" {
+    export COMPOSE_PROJECT_NAME="app" DOMAIN_NAME="app.example.com" CCTL_PROJECT_NETWORK="app_net"
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    netsim_add_network "app_net" "app" "10.240.0.0/24" "app.example.com"
 
-    declare -A CCTL_TEST_NETS=()
-    mock_docker_with_networks CCTL_TEST_NETS "${WORKDIR}/docker_calls.log"
-
-    run _install_cleanup_orphan_network
+    run _install_connect_proxy
     assert_success
-    run cat "${WORKDIR}/docker_calls.log"
-    refute_output --partial "network disconnect"
-    refute_output --partial "network rm"
+    grep -q "network connect --alias app.example.com app_net nginx-proxy" "${WORKDIR}/docker_calls.log"
+    netsim_is_connected "app_net"
 }
 
-@test "_install_cleanup_orphan_network (regressao B1): projeto 'moodle' nao toca a rede de 'moodle-lab'" {
-    export COMPOSE_PROJECT_NAME="moodle"
+@test "_install_connect_proxy: sem CCTL_PROJECT_NETWORK avisa e nao procura rede por nome" {
+    export COMPOSE_PROJECT_NAME="app" DOMAIN_NAME="app.example.com"
+    unset CCTL_PROJECT_NETWORK
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    netsim_add_network "app_net" "app" "10.240.0.0/24"
 
-    declare -A CCTL_TEST_NETS=(
-        [moodle_network]=""
-        [moodle-lab_moodle-network]=""
-    )
-    mock_docker_with_networks CCTL_TEST_NETS "${WORKDIR}/docker_calls.log"
-
-    run _install_cleanup_orphan_network
+    run _install_connect_proxy
     assert_success
-    run cat "${WORKDIR}/docker_calls.log"
-    assert_output --partial "network disconnect moodle_network nginx-proxy"
-    assert_output --partial "network rm moodle_network"
-    refute_output --partial "network disconnect moodle-lab_moodle-network nginx-proxy"
-    refute_output --partial "network rm moodle-lab_moodle-network"
+    assert_output --partial "CCTL_PROJECT_NETWORK nao definido"
+    run ! grep -q "network connect" "${WORKDIR}/docker_calls.log"
+}
+
+@test "_install_nginx: conecta o proxy a rede do projeto (CCTL_PROJECT_NETWORK) antes de publicar o vhost" {
+    export HOST_NGINX=true HOST_SSL=true SSL_MODE=self-signed
+    export DOMAIN_NAME="app.example.com" COMPOSE_PROJECT_NAME="app" CCTL_PROJECT_NETWORK="app_net"
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    netsim_add_network "app_net" "app" "10.240.0.0/24" "app.example.com"
+    echo "VHOST" > ./nginx/site.conf
+
+    run _install_nginx
+    assert_success
+    netsim_is_connected "app_net"
+}
+
+@test "_install_nginx: conexao recusada com vhost sem alvos falha e nao publica" {
+    # O bootstrap ACME tambem nao tem `set $target`; a politica aprovada aceita
+    # esse vhost. A barreira aqui e exclusivamente a conexao obrigatoria do
+    # proxy, que sem o retorno explicito seria ignorada pelo contexto `||`.
+    export HOST_NGINX=true HOST_SSL=true SSL_MODE=self-signed
+    export DOMAIN_NAME="app.example.com" COMPOSE_PROJECT_NAME="app" CCTL_PROJECT_NETWORK="app_net"
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    netsim_add_network "app_net" "app" "10.240.0.0/24" "app.example.com"
+    netsim_fail_connect "app_net"
+    printf 'server { listen 80; server_name app.example.com; }\n' > ./nginx/site.conf
+
+    run _install_nginx
+    assert_failure
+    assert_output --partial "Nao foi possivel conectar"
+    [[ ! -e "${NGINX_VHOSTS_DIR}/app.conf" ]]
+    run ! netsim_is_connected "app_net"
 }
 
 # ============================================================
@@ -284,6 +310,20 @@ EOF
     assert_success
 }
 
+@test "_install_write_instance_file: registra a rede e a faixa do projeto no inventario (adocao sem registro previo)" {
+    export PROJECT_TYPE="moodle" CLIENT_NAME="acme" DOMAIN_NAME="acme.example.com"
+    export COMPOSE_PROJECT_NAME="acme" CCTL_VERSION="0.1.0"
+    export CCTL_PROJECT_NETWORK="acme_net" COMPOSE_PROJECT_SUBNET="10.240.2.0/24"
+
+    run _install_write_instance_file
+    assert_success
+
+    run grep $'NETWORK\tacme_net' "${CCTL_INVENTORY_DIR}/acme.tsv"
+    assert_success
+    run grep $'SUBNET\t10.240.2.0/24' "${CCTL_INVENTORY_DIR}/acme.tsv"
+    assert_success
+}
+
 @test "_install_write_instance_file: adota instancia sem registro prepared previo (instalacao fora do cctl init)" {
     export PROJECT_TYPE="moodle"
     export CLIENT_NAME="acme"
@@ -336,9 +376,8 @@ EOF
 _stub_install_steps_before_preflight() {
     source_lib validate.sh
     echo "PROJECT_TYPE=x" > project.conf
-    _install_cleanup_orphan_network() { :; }
     passwords_generate_all() { :; }
-    _install_allocate_subnet() { return 0; }
+    _install_ensure_network() { return 0; }
     _install_set_ssl_paths() { return 0; }
     env_render_all_templates() { :; }
     env_load() { :; }
@@ -364,6 +403,49 @@ _stub_install_steps_before_preflight() {
     # compose_pull stub retorna 1 para parar o install logo ali
     assert_failure
     [[ -s "${WORKDIR}/pull.flag" ]]
+}
+
+@test "cmd_install: pre-flight falhando -> a rede NAO e criada (o pre-flight vem antes)" {
+    _stub_install_steps_before_preflight
+    core_sudo_check() { return 1; }
+    _install_ensure_network() { echo "rede-criada" >> "${WORKDIR}/rede.flag"; return 0; }
+
+    run cmd_install < /dev/null
+    assert_failure
+    [[ ! -e "${WORKDIR}/rede.flag" ]]
+}
+
+@test "cmd_install: a rede e criada DEPOIS do pre-flight e ANTES do pull/up" {
+    _stub_install_steps_before_preflight
+    core_sudo_check() { return 0; }
+    _install_ensure_network() { echo "rede" >> "${WORKDIR}/ordem.log"; return 0; }
+    compose_pull() { echo "pull" >> "${WORKDIR}/ordem.log"; return 1; }
+
+    run cmd_install < /dev/null
+    assert_failure
+    [[ "$(cat "${WORKDIR}/ordem.log")" == $'rede\npull' ]]
+}
+
+@test "cmd_install: falha ao criar a rede -> rc != 0 e compose_pull NAO e chamado" {
+    _stub_install_steps_before_preflight
+    core_sudo_check() { return 0; }
+    _install_ensure_network() { return 1; }
+
+    run cmd_install < /dev/null
+    assert_failure
+    [[ ! -e "${WORKDIR}/pull.flag" ]]
+}
+
+@test "cmd_install: range de rede publico no cctl.conf -> pre-flight falha antes de criar a rede" {
+    _stub_install_steps_before_preflight
+    core_sudo_check() { return 0; }
+    export CCTL_NETWORK_RANGE="172.32.0.0/16"
+    _install_ensure_network() { echo "rede-criada" >> "${WORKDIR}/rede.flag"; return 0; }
+
+    run cmd_install < /dev/null
+    assert_failure
+    assert_output --partial "nao e privado"
+    [[ ! -e "${WORKDIR}/rede.flag" ]]
 }
 
 # ============================================================
@@ -512,4 +594,131 @@ _stub_install_steps_after_preflight() {
     run cmd_install < /dev/null
     assert_success
     [[ -e ./.cctl-instance ]]
+}
+
+# ============================================================
+# Alvo do vhost: <container>.<rede> (render, publicacao e conferencia)
+# ============================================================
+
+# Vhost minimo com um alvo, no formato dos templates.
+_write_site_conf_target() {
+    printf 'server {\n\tlocation / {\n\t\tset $target %s;\n\t\tproxy_pass https://$target;\n\t}\n}\n' "$1" > ./nginx/site.conf
+}
+
+@test "render dos vhosts dos templates: o alvo sai <projeto>-<servico>.<rede> (moodle ssl, moodle nossl, dspace)" {
+    cat > .env <<'EOF'
+COMPOSE_PROJECT_NAME=acme
+CCTL_PROJECT_NETWORK=acme_net
+DOMAIN_NAME=acme.example.com
+SSL_CERT_PATH=/c.pem
+SSL_KEY_PATH=/k.pem
+EOF
+    unset ENV_FILE
+    export COMPOSE_PROJECT_NAME="acme"
+    env_render_template "${CCTL_ROOT}/templates/moodle/nginx/site.conf.template" out-moodle.conf
+    env_render_template "${CCTL_ROOT}/templates/moodle/nginx/site-nossl.conf.template" out-nossl.conf
+    env_render_template "${CCTL_ROOT}/templates/dspace/nginx/site.conf.template" out-dspace.conf
+
+    grep -q 'set \$target acme-moodle-app.acme_net:443;' out-moodle.conf
+    grep -q 'set \$target acme-moodle-app.acme_net:80;' out-nossl.conf
+    grep -q 'set \$target acme-dspace.acme_net:8080;' out-dspace.conf
+    grep -q 'set \$target acme-dspace-angular.acme_net:4000;' out-dspace.conf
+
+    # nenhum alvo curto sobra e o validador de publicacao aceita os tres
+    run grep -E 'set \$target [a-z-]+:' out-moodle.conf out-nossl.conf out-dspace.conf
+    assert_failure
+    run vhost_validate_targets out-moodle.conf acme_net
+    assert_success
+    run vhost_validate_targets out-dspace.conf acme_net
+    assert_success
+}
+
+@test "a rede gravada no .env pelo passo da rede ja vale no render do vhost (ordem do install)" {
+    export COMPOSE_PROJECT_NAME="acme" DOMAIN_NAME="acme.example.com"
+    unset ENV_FILE CCTL_PROJECT_NETWORK COMPOSE_PROJECT_SUBNET
+    printf 'COMPOSE_PROJECT_NAME=acme\nCCTL_PROJECT_NETWORK=\nCOMPOSE_PROJECT_SUBNET=\n' > .env
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+
+    network_provision_for_install < /dev/null
+    env_render_template "${CCTL_ROOT}/templates/moodle/nginx/site-nossl.conf.template" out.conf
+    grep -q 'set \$target acme-moodle-app.acme_net:80;' out.conf
+}
+
+@test "cmd_install: o passo da rede roda ANTES de renderizar os templates" {
+    _stub_install_steps_before_preflight
+    core_sudo_check() { return 0; }
+    _install_ensure_network() { echo "rede" >> "${WORKDIR}/ordem.log"; return 0; }
+    env_render_all_templates() { echo "render" >> "${WORKDIR}/ordem.log"; }
+
+    run cmd_install < /dev/null
+    [[ "$(head -n2 "${WORKDIR}/ordem.log")" == $'rede\nrender' ]]
+}
+
+@test "_install_nginx: CCTL_PROJECT_NETWORK vazio com vhost que tem alvo -> falha e o vhost NAO e publicado" {
+    export HOST_NGINX=true HOST_SSL=true SSL_MODE=self-signed
+    export DOMAIN_NAME="app.example.com" COMPOSE_PROJECT_NAME="app"
+    unset CCTL_PROJECT_NETWORK
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    _write_site_conf_target "app-moodle-app.:443"
+
+    run _install_nginx
+    assert_failure
+    assert_output --partial "CCTL_PROJECT_NETWORK esta vazio"
+    [[ ! -e "${NGINX_VHOSTS_DIR}/app.conf" ]]
+    run ! grep -q "nginx -t" "${WORKDIR}/docker_calls.log"
+}
+
+@test "_install_nginx: alvo com nome curto -> falha e o vhost NAO e publicado" {
+    export HOST_NGINX=true HOST_SSL=true SSL_MODE=self-signed
+    export DOMAIN_NAME="app.example.com" COMPOSE_PROJECT_NAME="app" CCTL_PROJECT_NETWORK="app_net"
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    _write_site_conf_target "moodle-app:443"
+
+    run _install_nginx
+    assert_failure
+    assert_output --partial "nao esta no formato"
+    [[ ! -e "${NGINX_VHOSTS_DIR}/app.conf" ]]
+}
+
+@test "_install_nginx: alvo resolve para o container deste projeto -> publica e passa na conferencia" {
+    export HOST_NGINX=true HOST_SSL=true SSL_MODE=self-signed
+    export DOMAIN_NAME="app.example.com" COMPOSE_PROJECT_NAME="app" CCTL_PROJECT_NETWORK="app_net"
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    netsim_add_network "app_net" "app" "10.240.0.0/24" "app.example.com"
+    netsim_add_container "app-moodle-app" "app_net" "10.240.0.5"
+    _write_site_conf_target "app-moodle-app.app_net:443"
+
+    run _install_nginx
+    assert_success
+    grep -q 'set \$target app-moodle-app.app_net:443;' "${NGINX_VHOSTS_DIR}/app.conf"
+    grep -q "getent ahostsv4 app-moodle-app.app_net" "${WORKDIR}/docker_calls.log"
+}
+
+@test "_install_nginx: alvo resolve para OUTRO IP -> rc 1 com a causa (o install falha)" {
+    export HOST_NGINX=true HOST_SSL=true SSL_MODE=self-signed
+    export DOMAIN_NAME="app.example.com" COMPOSE_PROJECT_NAME="app" CCTL_PROJECT_NETWORK="app_net"
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    netsim_add_network "app_net" "app" "10.240.0.0/24" "app.example.com"
+    netsim_add_container "app-moodle-app" "app_net" "10.240.0.5"
+    netsim_resolve_override "app-moodle-app.app_net" "10.240.7.7"
+    _write_site_conf_target "app-moodle-app.app_net:443"
+
+    run _install_nginx
+    assert_failure
+    assert_output --partial "resolve para 10.240.7.7"
+    assert_output --partial "10.240.0.5"
+}
+
+@test "_install_nginx: alvo nao resolve -> rc 1" {
+    export HOST_NGINX=true HOST_SSL=true SSL_MODE=self-signed
+    export DOMAIN_NAME="app.example.com" COMPOSE_PROJECT_NAME="app" CCTL_PROJECT_NETWORK="app_net"
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    netsim_add_network "app_net" "app" "10.240.0.0/24" "app.example.com"
+    netsim_add_container "app-moodle-app" "app_net" "10.240.0.5"
+    netsim_resolve_override "app-moodle-app.app_net" "none"
+    _write_site_conf_target "app-moodle-app.app_net:443"
+
+    run _install_nginx
+    assert_failure
+    assert_output --partial "NAO resolve"
 }

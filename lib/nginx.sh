@@ -168,7 +168,16 @@ volumes:
 EOF
 }
 
+# Sobe o proxy e, depois de subir (ou de ja estar de pe), reconecta-o a toda
+# rede de projeto gerenciada pelo cctl em que ele nao esteja — cobre o caso
+# do container do proxy ter sido recriado, que o deixaria fora das redes dos
+# projetos (ver network_reconnect_proxy em lib/network.sh).
 nginx_proxy_up() {
+    _nginx_proxy_ensure_running || return $?
+    network_reconnect_proxy || return 1
+}
+
+_nginx_proxy_ensure_running() {
     if ! docker network inspect "${PROXY_NETWORK}" >/dev/null 2>&1; then
         msg_info "Criando rede ${PROXY_NETWORK}..."
         if ! docker network create "${PROXY_NETWORK}" >/dev/null; then

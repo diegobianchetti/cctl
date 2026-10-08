@@ -234,7 +234,7 @@ compose_up() {
     log_success "Containers iniciados"
 }
 
-# Down (remove containers e rede)
+# Down (remove containers; a rede do projeto e do cctl e continua existindo)
 compose_down() {
     msg_step "DOWN" "Removendo containers..."
     compose_exec down "$@"

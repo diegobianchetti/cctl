@@ -141,6 +141,71 @@ vhost_write() {
         "Config nginx invalida! Restaurando..."
 }
 
+# vhost_regex_escape <texto>
+#
+# Escapa <texto> para entrar LITERAL numa regex estendida (grep -E / sed -E):
+# os pontos de "proj-app.proj_net" nao podem casar "qualquer caractere". O
+# hifen fica de fora de proposito (fora de colchetes ele ja e literal, e
+# "\-" gera aviso em alguns greps). Unica funcao de escape do cctl para
+# regex de "set $target".
+vhost_regex_escape() {
+    printf '%s' "$1" | sed -E 's/[][\\.*^$+?(){}|\/]/\\&/g'
+}
+
+# vhost_sed_replacement_escape <texto>
+#
+# Escapa <texto> para o LADO DE SUBSTITUICAO de um "s/…/…/" do sed: &, \ e o
+# delimitador / teriam efeito especial.
+vhost_sed_replacement_escape() {
+    printf '%s' "$1" | sed -E 's/[&\\\/]/\\&/g'
+}
+
+# vhost_target_hosts <conteudo-do-vhost>
+#
+# Imprime o HOST (sem a porta) de cada "set $target <host>:<porta>;" do
+# conteudo, um por linha, na ordem em que aparecem.
+vhost_target_hosts() {
+    local line
+    while IFS= read -r line; do
+        line="${line#*set}"
+        line="$(sed -E 's/^[[:space:]]*[$]target[[:space:]]+//; s/;.*$//; s/[[:space:]]+$//' <<< "${line}")"
+        printf '%s\n' "${line%:*}"
+    done < <(grep -E '^[[:space:]]*set[[:space:]]+[$]target[[:space:]]+' <<< "$1" || true)
+}
+
+# vhost_validate_targets <arquivo-do-vhost> <rede>
+#
+# Confere, ANTES de publicar, que todo "set $target" do vhost renderizado usa
+# o nome qualificado "<container>.<rede do projeto>". Falha (rc 1, com a
+# causa) se a rede estiver vazia (o render deixou "<container>.:porta") ou se
+# o alvo for um nome curto: o vhost so e publicado com alvo inequivoco, para
+# um erro virar falha (502) e nunca o site de outro projeto.
+# Vhost sem "set $target" (ex.: o HTTP temporario do desafio ACME) passa.
+vhost_validate_targets() {
+    local file="$1" network="${2:-}"
+    local content host
+    # arquivo ausente: quem publica (nginx_enable_site) reclama com a mensagem certa
+    [[ -f "${file}" ]] || return 0
+    content="$(cat "${file}")" || return 1
+
+    while IFS= read -r host; do
+        [[ -n "${host}" ]] || continue
+        if [[ -z "${network}" ]]; then
+            log_error "CCTL_PROJECT_NETWORK esta vazio, entao o alvo '${host}' do vhost ficaria incompleto. O vhost NAO foi publicado. A rede do projeto e criada no install; confira o .env."
+            return 1
+        fi
+        if [[ "${host}" != *".${network}" || "${host}" == ".${network}" || "${host}" == *".${network}.${network}" ]]; then
+            log_error "O alvo '${host}' do vhost nao esta no formato <container>.${network}. O vhost NAO foi publicado. Use {{COMPOSE_PROJECT_NAME}}-<servico>.{{CCTL_PROJECT_NETWORK}} no template (o nome curto pode cair no projeto errado)."
+            return 1
+        fi
+        if [[ -z "${COMPOSE_PROJECT_NAME:-}" || "${host}" != "${COMPOSE_PROJECT_NAME}-"* ]]; then
+            log_error "O alvo '${host}' do vhost nao comeca com '${COMPOSE_PROJECT_NAME:-<COMPOSE_PROJECT_NAME vazio>}-' (nome do container do projeto). O vhost NAO foi publicado. Confira se {{COMPOSE_PROJECT_NAME}} foi renderizado."
+            return 1
+        fi
+    done < <(vhost_target_hosts "${content}")
+    return 0
+}
+
 # vhost_switch_target <vhost> <old_alias> <new_alias>
 #
 # Reescreve SO as linhas "set $target <old_alias>:" para <new_alias>
@@ -161,7 +226,12 @@ vhost_switch_target() {
         return 1
     }
 
-    printf '%s\n' "${content}" | sed -E "s/^([[:space:]]*set [\$]target[[:space:]]+)${old_alias}:/\1${new_alias}:/" > "${tmpfile}"
+    # os aliases tem '.' e '-' (<container>.<rede>): escapados, so casa o alias
+    # inteiro (ex.: "proj-dspace.net:" nunca casa "proj-dspace-angular.net:")
+    local old_re new_repl
+    old_re="$(vhost_regex_escape "${old_alias}")"
+    new_repl="$(vhost_sed_replacement_escape "${new_alias}")"
+    printf '%s\n' "${content}" | sed -E "s/^([[:space:]]*set[[:space:]]+[\$]target[[:space:]]+)${old_re}:/\1${new_repl}:/" > "${tmpfile}"
 
     _vhost_apply "${vhost}" "${tmpfile}" \
         "Falha ao criar backup do vhost ${vhost}" \

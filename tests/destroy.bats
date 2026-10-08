@@ -126,3 +126,96 @@ teardown() {
     [[ -d "${INSTANCE_DIR}" ]]
     [[ -f "${CCTL_INVENTORY_DIR}/app1.tsv" ]]
 }
+
+@test "cmd_destroy: network rm falhando aborta e preserva diretorio e registro para retomar" {
+    export COMPOSE_PROJECT_NAME="app1"
+    export DOMAIN_NAME="app1.example.com"
+    export CCTL_PROJECT_NETWORK="app1_net"
+    export COMPOSE_PROJECT_SUBNET="10.240.4.0/24"
+    export CCTL_LOG_DIR="${WORKDIR}/logs"
+    export CCTL_LOG_FILE=""
+    export CRON_DIR="${WORKDIR}/cron"
+    export LOGROTATE_DIR="${WORKDIR}/logrotate"
+    mkdir -p "${CRON_DIR}" "${LOGROTATE_DIR}"
+    inventory_mark_installed "app1" "moodle" "app1" "app1.example.com" "${INSTANCE_DIR}" "app1_net" "10.240.4.0/24"
+    mock_docker_netsim "${WORKDIR}/docker_calls.log"
+    netsim_add_network "app1_net" "app1" "10.240.4.0/24" "app1.example.com"
+    netsim_fail_rm
+
+    cd "${INSTANCE_DIR}" || return 1
+    run bash -c '
+        source "'"${CCTL_ROOT}"'/lib/colors.sh"
+        source "'"${CCTL_ROOT}"'/lib/log.sh"
+        source "'"${CCTL_ROOT}"'/lib/core.sh"
+        source "'"${CCTL_ROOT}"'/lib/inventory.sh"
+        source "'"${CCTL_ROOT}"'/lib/network.sh"
+        source "'"${CCTL_ROOT}"'/lib/volumes.sh"
+        source "'"${CCTL_ROOT}"'/lib/compose.sh"
+        source "'"${CCTL_ROOT}"'/lib/cron.sh"
+        source "'"${CCTL_ROOT}"'/lib/nginx.sh"
+        export CCTL_ROOT="'"${CCTL_ROOT}"'"
+        export CCTL_INVENTORY_DIR="'"${CCTL_INVENTORY_DIR}"'"
+        source "'"${CCTL_ROOT}"'/commands/destroy.sh"
+        printf "app1\\napp1\\n" | cmd_destroy
+    '
+    assert_failure
+    assert_output --partial "network rm app1_net"
+    assert_output --partial "Destroy interrompido"
+    refute_output --partial "destruida completamente"
+
+    [[ -d "${INSTANCE_DIR}" ]]
+    [[ -f "${CCTL_INVENTORY_DIR}/app1.tsv" ]]
+    inventory_read "app1"
+    [[ "${INV_NETWORK}" == "app1_net" ]]
+    [[ "${INV_SUBNET}" == "10.240.4.0/24" ]]
+}
+
+@test "cmd_destroy: volume recusado com rede removida preserva diretorio e inventario" {
+    export COMPOSE_PROJECT_NAME="app1" DOMAIN_NAME="app1.example.com"
+    export CCTL_PROJECT_NETWORK="app1_net" COMPOSE_PROJECT_SUBNET="10.240.4.0/24"
+    export CCTL_LOG_DIR="${WORKDIR}/logs" CCTL_LOG_FILE=""
+    export CRON_DIR="${WORKDIR}/cron" LOGROTATE_DIR="${WORKDIR}/logrotate"
+    mkdir -p "${CRON_DIR}" "${LOGROTATE_DIR}"
+    inventory_mark_installed "app1" "moodle" "app1" "app1.example.com" "${INSTANCE_DIR}" "app1_net" "10.240.4.0/24"
+
+    # Rede e removida com sucesso, mas o volume recusa a remocao. Esse mock
+    # exercita o clear-all real chamado pelo destroy, sem Docker de verdade.
+    mock_cmd docker '
+        echo "$*" >> "'"${WORKDIR}"'/docker_calls.log"
+        case "$1 $2" in
+            "volume ls") echo "app1_dbdata"; exit 0 ;;
+            "volume rm") exit 1 ;;
+            "network inspect") exit 0 ;;
+            "network disconnect") exit 0 ;;
+            "network rm") touch "'"${WORKDIR}"'/network_removed"; exit 0 ;;
+        esac
+        exit 0
+    '
+
+    cd "${INSTANCE_DIR}" || return 1
+    run bash -c '
+        source "'"${CCTL_ROOT}"'/lib/colors.sh"
+        source "'"${CCTL_ROOT}"'/lib/log.sh"
+        source "'"${CCTL_ROOT}"'/lib/core.sh"
+        source "'"${CCTL_ROOT}"'/lib/inventory.sh"
+        source "'"${CCTL_ROOT}"'/lib/network.sh"
+        source "'"${CCTL_ROOT}"'/lib/volumes.sh"
+        source "'"${CCTL_ROOT}"'/lib/compose.sh"
+        source "'"${CCTL_ROOT}"'/lib/cron.sh"
+        source "'"${CCTL_ROOT}"'/lib/nginx.sh"
+        export CCTL_ROOT="'"${CCTL_ROOT}"'"
+        export CCTL_INVENTORY_DIR="'"${CCTL_INVENTORY_DIR}"'"
+        source "'"${CCTL_ROOT}"'/commands/destroy.sh"
+        printf "app1\\napp1\\n" | cmd_destroy
+    '
+    assert_failure
+    assert_output --partial "Falha ao remover um ou mais volumes"
+    assert_output --partial "Destroy interrompido"
+    [[ -e "${WORKDIR}/network_removed" ]]
+    [[ -d "${INSTANCE_DIR}" ]]
+    [[ -f "${CCTL_INVENTORY_DIR}/app1.tsv" ]]
+    inventory_read "app1"
+    # A rede saiu de fato, portanto seus campos sao limpos; o registro da
+    # instancia permanece porque o volume ainda exige retomada do teardown.
+    [[ -z "${INV_NETWORK}" && -z "${INV_SUBNET}" ]]
+}

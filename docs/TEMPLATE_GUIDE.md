@@ -77,10 +77,6 @@ DB_TYPE="postgresql"
 # Serviços acessíveis via cctl connect <serviço>
 CONNECTABLE_SERVICES=("gitlab" "gitlab-db")
 
-# Alocação de rede
-SUBNET_RANGE="172.32.0.0/16"
-SUBNET_PREFIX_LEN=24
-
 # Backup
 BACKUP_DIR="./backups"
 BACKUP_RETENTION=3
@@ -113,8 +109,6 @@ HOOK_POST_INSTALL="post-install.sh"
 | `DB_CUSTOM_CONFIG` | path | não | Path do arquivo de config customizado do banco. |
 | `DB_CONFIG_PATH` | path | não | Destino do arquivo dentro do container do banco. |
 | `CONNECTABLE_SERVICES` | array | não | Serviços disponíveis em `cctl connect`. |
-| `SUBNET_RANGE` | CIDR | não | Pool de subnets para alocação. Default: `172.32.0.0/16` |
-| `SUBNET_PREFIX_LEN` | int | não | Tamanho do prefixo da subnet alocada. Default: `24` |
 | `BACKUP_DIR` | path | não | Diretório dos backups. Default: `./backups` |
 | `BACKUP_RETENTION` | int | não | Dias de retenção dos backups. Default: `3` |
 | `HOOK_POST_INSTALL` | string | não | Nome do script em `scripts/` executado pós-install. |
@@ -130,7 +124,7 @@ serviço diretamente. Templates com mais de um `set $target` no vhost (ex.:
 dois é o alvo padrão — o outro serviço continua acessível via `--service`.
 
 O `cctl rollout` deriva porta e esquema (`http`/`https`) diretamente do vhost
-renderizado (`set $target <alias>:<porta>;` + `proxy_pass <scheme>://$target;`),
+renderizado (`set $target <container>.<rede>:<porta>;` + `proxy_pass <scheme>://$target;`),
 então nenhuma variável adicional de porta é necessária no `project.conf`. Para
 o healthcheck em modo `docker` funcionar automaticamente (`--health-mode auto`
 detecta e usa esse modo), o serviço em `docker-compose.yaml` precisa declarar
@@ -151,8 +145,9 @@ COMPOSE_PROJECT_NAME=_COMPOSE_PROJECT_NAME_
 DOMAIN_NAME=_DOMAIN_NAME_
 GITLAB_ROOT_PASSWORD=_GITLAB_ROOT_PASSWORD_
 POSTGRES_PASSWORD=_POSTGRES_PASSWORD_
-## configurado via cctl install ##
-COMPOSE_PROJECT_SUBNET=172.32.1.0/24
+## preenchido pelo cctl install — não edite ##
+CCTL_PROJECT_NETWORK=
+COMPOSE_PROJECT_SUBNET=
 
 ##########################
 ## container gitlab      ##
@@ -184,6 +179,78 @@ O formato `_PLACEHOLDER_` evita conflito com variáveis de shell. O formato
 `{{PLACEHOLDER}}` evita conflito com variáveis do nginx (`$host`, `$uri`) e
 com outros sistemas de template.
 
+## Contrato de rede do template
+
+O template **não escolhe rede, range nem subnet**. Quem cria a rede do projeto
+é o `cctl install` (antes do primeiro `docker compose up`), com uma faixa tirada
+do range global do `cctl.conf`. O compose só a **usa**.
+
+**O que o template declara:**
+
+- no compose, uma rede de topo `external: true` com
+  `name: ${CCTL_PROJECT_NETWORK}` — sem `driver`, `ipam` nem `subnet`:
+
+  ```yaml
+  networks:
+    app-network:                     # o nome lógico é livre; os serviços usam este nome
+      external: true
+      name: ${CCTL_PROJECT_NETWORK}
+
+  services:
+    app:
+      container_name: ${COMPOSE_PROJECT_NAME}-app
+      networks:
+        - app-network
+  ```
+
+- `container_name: ${COMPOSE_PROJECT_NAME}-<serviço>` em todo serviço que o
+  nginx-proxy precisa alcançar (evita colisão de nomes entre instâncias);
+- no vhost, `set $target {{COMPOSE_PROJECT_NAME}}-<serviço>.{{CCTL_PROJECT_NETWORK}}:<porta>;`
+  — o nome do container qualificado pela rede, nunca o nome curto do serviço
+  (ver "Arquivo opcional: `nginx/site.conf.template`");
+- no `project.conf`, nada de `SUBNET_RANGE`/`SUBNET_PREFIX_LEN` (se ainda
+  existirem, o cctl ignora e avisa que agora quem manda é o `cctl.conf`);
+- no `docker/.env.template`, as duas variáveis vazias, com o aviso para não
+  editar:
+
+  ```bash
+  ## preenchido pelo cctl install — não edite ##
+  CCTL_PROJECT_NETWORK=
+  COMPOSE_PROJECT_SUBNET=
+  ```
+
+Redes internas extras (ex.: `internal: true` para o banco) são permitidas, sem
+subnet fixa; o nginx-proxy nunca entra nelas.
+
+**O que o cctl fornece:**
+
+- a rede `<projeto>_net`, criada antes do primeiro `up`, com os labels
+  `io.cctl.managed`, `io.cctl.project` e `io.cctl.domain` (ela continua
+  existindo no `cctl down`; só `clear-all`/`destroy` a apagam);
+- no `.env`: `CCTL_PROJECT_NETWORK` (nome da rede) e `COMPOSE_PROJECT_SUBNET`
+  (a faixa, **só para leitura** — útil quando o serviço precisa dela, como a
+  lista de proxies confiáveis do DSpace:
+  `proxies__P__trusted__P__ipranges: "${COMPOSE_PROJECT_SUBNET}"`);
+- o nginx-proxy conectado à rede, com o domínio do projeto (`DOMAIN_NAME`)
+  como alias.
+
+**Rodando fora do cctl.** Por usar uma rede `external`, o template **não sobe com
+`docker compose up` puro**: sem a rede, o compose falha com
+`network ... declared as external, but could not be found`. Para testar um
+template sem o cctl, crie a rede antes (o equivalente ao que o cctl faz):
+
+```bash
+docker network create --driver bridge --subnet 10.250.0.0/24 meu-teste_net
+export CCTL_PROJECT_NETWORK=meu-teste_net COMPOSE_PROJECT_SUBNET=10.250.0.0/24
+docker compose -f docker/docker-compose.yaml -p meu-teste up -d
+
+# ao terminar
+docker compose -f docker/docker-compose.yaml -p meu-teste down
+docker network rm meu-teste_net
+```
+
+Use uma faixa que não colida com nenhuma rede ou rota da máquina.
+
 ## Arquivo opcional: `nginx/site.conf.template`
 
 Vhost renderizado durante `cctl install` se `HOST_NGINX=true` e
@@ -213,7 +280,9 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/{{DOMAIN_NAME}}/privkey.pem;
 
     location / {
-        proxy_pass http://{{COMPOSE_PROJECT_NAME}}_gitlab_1:8080;
+        resolver 127.0.0.11;
+        set $target {{COMPOSE_PROJECT_NAME}}-gitlab.{{CCTL_PROJECT_NETWORK}}:8080;
+        proxy_pass http://$target;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -221,6 +290,24 @@ server {
     }
 }
 ```
+
+**O alvo do vhost é sempre
+`{{COMPOSE_PROJECT_NAME}}-<serviço>.{{CCTL_PROJECT_NETWORK}}:<porta>`, nunca o
+nome curto do serviço** (`gitlab:8080`). O motivo: o nginx-proxy está na rede de
+todos os projetos, então com vários projetos no mesmo host o nome curto pode
+cair no projeto errado e servir o site de outro cliente; o nome qualificado só
+resolve dentro da rede deste projeto, e um erro vira 502 em vez do site alheio.
+Exemplo pronto (o `<serviço>` é o `container_name` sem o prefixo do projeto):
+
+```nginx
+set $target {{COMPOSE_PROJECT_NAME}}-gitlab.{{CCTL_PROJECT_NETWORK}}:8080;
+proxy_pass http://$target;
+```
+
+O `cctl install` confere isso: não publica um vhost cujo alvo esteja sem a rede
+(ou com o nome curto) e, depois de publicar, testa de dentro do proxy que o alvo
+resolve para o container deste projeto — senão o install falha dizendo qual alvo
+e o que resolveu.
 
 ## Arquivo opcional: `nginx/site-nossl.conf.template`
 
@@ -361,12 +448,10 @@ services:
           memory: ${GITLAB_DB_MEMORY_LIMIT}
 
 networks:
-  frontend:
-    name: ${COMPOSE_PROJECT_NAME}-frontend
-    ipam:
-      config:
-        - subnet: ${COMPOSE_PROJECT_SUBNET}
-  backend:
+  frontend:                           # a rede do projeto, criada pelo cctl
+    external: true
+    name: ${CCTL_PROJECT_NETWORK}
+  backend:                            # rede interna extra: permitida, sem subnet fixa
     name: ${COMPOSE_PROJECT_NAME}-backend
     internal: true
 

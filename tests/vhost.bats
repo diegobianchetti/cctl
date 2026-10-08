@@ -209,3 +209,128 @@ EOF
 
     cmp -s "${dst}" "${WORKDIR}/vhost.orig"
 }
+
+# --- escape de regex e alvos qualificados (<container>.<rede>) -----------------
+
+@test "vhost_regex_escape: ponto e metacaracteres viram literais; hifen fica" {
+    run vhost_regex_escape 'proj-app.proj_net'
+    assert_output 'proj-app\.proj_net'
+    run vhost_regex_escape 'a[b]c*d+e?f(g)h{i}j|k^l$m/n'
+    assert_output 'a\[b\]c\*d\+e\?f\(g\)h\{i\}j\|k\^l\$m\/n'
+}
+
+@test "vhost_regex_escape: o resultado casa o texto literal e NAO casa o 'ponto coringa'" {
+    local re
+    re="$(vhost_regex_escape 'proj-app.net')"
+    run grep -cE "^${re}:" <<< 'proj-app.net:443'
+    assert_output "1"
+    run grep -cE "^${re}:" <<< 'proj-appXnet:443'
+    assert_output "0"
+}
+
+@test "vhost_target_hosts: lista o host (sem a porta) de cada set \$target, ignorando comentarios" {
+    run vhost_target_hosts $'\t\t# set $target velho.net:80;\n\t\tset $target p-app.net:443;\n\t\tset $target p-ang.net:4000;'
+    assert_success
+    assert_line --index 0 "p-app.net"
+    assert_line --index 1 "p-ang.net"
+    [[ "${#lines[@]}" -eq 2 ]]
+}
+
+@test "vhost_switch_target: alias com '.' e '-' troca so a linha certa (sem casar parecidos nem prefixos)" {
+    mkdir -p vhosts
+    local dst="${WORKDIR}/vhosts/app.conf"
+    cat > "${dst}" <<'EOF'
+server {
+	location /a {
+		set $target proj-app.proj_net:443;
+		proxy_pass https://$target;
+	}
+	location /b {
+		set $target projXapp.proj_net:443;
+		proxy_pass https://$target;
+	}
+	location /c {
+		set $target proj-app-angular.proj_net:4000;
+		proxy_pass http://$target;
+	}
+	location /d {
+		set $target proj-app.outra_net:443;
+		proxy_pass https://$target;
+	}
+}
+EOF
+    run vhost_switch_target "${dst}" "proj-app.proj_net" "proj-app-green.proj_net"
+    assert_success
+
+    grep -q 'set \$target proj-app-green.proj_net:443;' "${dst}"
+    grep -q 'set \$target projXapp.proj_net:443;' "${dst}"
+    grep -q 'set \$target proj-app-angular.proj_net:4000;' "${dst}"
+    grep -q 'set \$target proj-app.outra_net:443;' "${dst}"
+    [[ "$(grep -c 'proj-app-green' "${dst}")" -eq 1 ]]
+}
+
+@test "vhost_validate_targets: alvo que nao comeca com COMPOSE_PROJECT_NAME- (placeholder sem render) -> rc 1" {
+    export COMPOSE_PROJECT_NAME="p"
+    printf '\t\tset $target {{COMPOSE_PROJECT_NAME}}-app.p_net:443;\n' > unr.conf
+    run vhost_validate_targets unr.conf "p_net"
+    assert_failure
+    assert_output --partial "nao comeca com 'p-'"
+
+    printf '\t\tset $target outro-app.p_net:443;\n' > outro.conf
+    run vhost_validate_targets outro.conf "p_net"
+    assert_failure
+}
+
+@test "vhost_validate_targets: aceita TAB/varios espacos depois de 'set'" {
+    export COMPOSE_PROJECT_NAME="p"
+    printf 'x {\n\t\tset\t$target   p-app.p_net:443;\n}\n' > tab.conf
+    run vhost_validate_targets tab.conf "p_net"
+    assert_success
+}
+
+@test "vhost_switch_target: aceita TAB depois de 'set'" {
+    mkdir -p vhosts
+    local dst="${WORKDIR}/vhosts/app.conf"
+    printf 'x {\n\t\tset\t$target p-app.p_net:443;\n}\n' > "${dst}"
+    run vhost_switch_target "${dst}" "p-app.p_net" "p-app-green.p_net"
+    assert_success
+    grep -q 'p-app-green.p_net:443;' "${dst}"
+}
+
+@test "vhost_validate_targets: alvo no formato <container>.<rede> passa; vhost sem alvo passa" {
+    export COMPOSE_PROJECT_NAME="p"
+    printf '\t\tset $target p-app.p_net:443;\n' > ok.conf
+    run vhost_validate_targets ok.conf "p_net"
+    assert_success
+    printf 'server { listen 80; }\n' > acme.conf
+    run vhost_validate_targets acme.conf "p_net"
+    assert_success
+}
+
+@test "vhost_validate_targets: rede vazia -> rc 1, diz que NAO publicou" {
+    export COMPOSE_PROJECT_NAME="p"
+    printf '\t\tset $target p-app.:443;\n' > bad.conf
+    run vhost_validate_targets bad.conf ""
+    assert_failure
+    assert_output --partial "CCTL_PROJECT_NETWORK esta vazio"
+    assert_output --partial "NAO foi publicado"
+}
+
+@test "vhost_validate_targets: nome curto ou placeholder sem render -> rc 1" {
+    export COMPOSE_PROJECT_NAME="p"
+    printf '\t\tset $target moodle-app:443;\n' > short.conf
+    run vhost_validate_targets short.conf "p_net"
+    assert_failure
+    assert_output --partial "nao esta no formato <container>.p_net"
+
+    printf '\t\tset $target p-app.{{CCTL_PROJECT_NETWORK}}:443;\n' > ph.conf
+    run vhost_validate_targets ph.conf "p_net"
+    assert_failure
+}
+
+@test "vhost_validate_targets: basta UM alvo ruim entre varios" {
+    export COMPOSE_PROJECT_NAME="p"
+    printf '\t\tset $target p-app.p_net:443;\n\t\tset $target curto:80;\n' > mix.conf
+    run vhost_validate_targets mix.conf "p_net"
+    assert_failure
+}

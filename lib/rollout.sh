@@ -2,10 +2,11 @@
 # lib/rollout.sh — Estrategias de rollout em single-host (Blue/Green, Rolling)
 #
 # Modelo de slots:
-#   slot blue  = container gerenciado pelo compose: "${COMPOSE_PROJECT_NAME}-<svc>",
-#                alias de rede "<svc>"
+#   slot blue  = container gerenciado pelo compose: "${COMPOSE_PROJECT_NAME}-<svc>";
+#                alvo no vhost "${COMPOSE_PROJECT_NAME}-<svc>.<rede do projeto>"
 #   slot green = container paralelo (override de compose runtime):
-#                "${COMPOSE_PROJECT_NAME}-<svc>-green", alias "<svc>-green"
+#                "${COMPOSE_PROJECT_NAME}-<svc>-green"; alvo no vhost
+#                "${COMPOSE_PROJECT_NAME}-<svc>-green.<rede do projeto>"
 #
 # O slot live alterna a cada rollout bem-sucedido. Um rollout sempre sobe a
 # versao nova no slot que NAO esta live e so troca o trafego (set $target do
@@ -195,33 +196,23 @@ _rollout_parse_args() {
 
 # --- Helpers de slot ----------------------------------------------------------
 
-# Resolve a rede Docker do projeto atual (COMPOSE_PROJECT_NAME), usada para
-# conectar o nginx-proxy durante o bluegreen. Delega para
-# network_list_for_project (lib/network.sh), que ja resolve por label exato
-# do compose com fallback ancorado por nome — um filtro solto por
-# "name=${COMPOSE_PROJECT_NAME}" colidiria com outro projeto cujo nome tem o
-# primeiro como prefixo (ex: "moodle" casando "moodle-lab_..."), a mesma
-# classe do bug B1. Uso: _rollout_project_network
+# Rede Docker do projeto atual: a que o cctl criou no install e registrou no
+# .env como CCTL_PROJECT_NETWORK (nunca procurada por nome/label do compose).
+# Vazia se o projeto nao tem rede registrada. Uso: _rollout_project_network
 _rollout_project_network() {
-    local networks network
-    networks="$(network_list_for_project "${COMPOSE_PROJECT_NAME}")"
-    network="$(head -n1 <<< "${networks}")"
-
-    if [[ -n "${network}" && $(wc -l <<< "${networks}") -gt 1 ]]; then
-        log_warn "Mais de uma rede encontrada para o projeto ${COMPOSE_PROJECT_NAME}, usando: ${network}"
-    fi
-
-    echo "${network}"
+    echo "${CCTL_PROJECT_NETWORK:-}"
 }
 
-# Alias de rede do slot. Uso: _rollout_slot_alias <servico> <blue|green>
+# Alvo (host) do slot no vhost: o nome do CONTAINER qualificado pela rede do
+# projeto, "<container>.<rede>" — blue "<proj>-<svc>.<rede>", green
+# "<proj>-<svc>-green.<rede>". Resolve so dentro da rede deste projeto (com a
+# rede de outro projeto nao resolve), entao um erro vira 502 e nunca o site de
+# outro cliente. Exige CCTL_PROJECT_NETWORK (o preflight do rollout recusa a
+# instancia sem rede antes de chegar aqui).
+# Uso: _rollout_slot_alias <servico> <blue|green>
 _rollout_slot_alias() {
     local service="$1" slot="$2"
-    if [[ "${slot}" == "blue" ]]; then
-        echo "${service}"
-    else
-        echo "${service}-green"
-    fi
+    echo "$(_rollout_slot_container "${service}" "${slot}").${CCTL_PROJECT_NETWORK:-}"
 }
 
 # Nome do container do slot. Uso: _rollout_slot_container <servico> <blue|green>
@@ -261,10 +252,10 @@ _rollout_state_get() {
 # determinar o alvo atual do vhost".
 #
 # Cuidado com templates com mais de um "set $target" no mesmo vhost (ex.
-# dspace): os padroes abaixo sao ancorados no alias do SERVICO alvo
-# ("${service}:" / "${service}-green:", com ':' logo apos o alias) — nunca
-# casam com o alias de outro servico, entao a primeira linha "set $target"
-# que aparecer no arquivo nao interfere na decisao.
+# dspace): os padroes abaixo sao ancorados no alvo COMPLETO do servico
+# ("<projeto>-<svc>.<rede>:" / "<projeto>-<svc>-green.<rede>:", com ':' logo
+# apos o alvo) — nunca casam com o alvo de outro servico, entao a primeira
+# linha "set $target" que aparecer no arquivo nao interfere na decisao.
 #
 # Uso: _rollout_resolve_live_slot <servico>
 _rollout_resolve_live_slot() {
@@ -284,11 +275,16 @@ _rollout_resolve_live_slot() {
         vhost_content="$(core_priv_run cat "${vhost}" 2>/dev/null)" || true
     fi
     if [[ -n "${vhost_content}" ]]; then
-        if printf '%s\n' "${vhost_content}" | grep -qE "^[[:space:]]*set [\$]target[[:space:]]+${service}-green:"; then
+        # Casa o alvo INTEIRO "<container>[.rede]:" (aliases escapados): o
+        # servico "dspace" nunca casa a linha de "dspace-angular".
+        local green_re blue_re
+        green_re="$(vhost_regex_escape "$(_rollout_slot_alias "${service}" green)")"
+        blue_re="$(vhost_regex_escape "$(_rollout_slot_alias "${service}" blue)")"
+        if printf '%s\n' "${vhost_content}" | grep -qE "^[[:space:]]*set[[:space:]]+[\$]target[[:space:]]+${green_re}:"; then
             echo "green"
             return 0
         fi
-        if printf '%s\n' "${vhost_content}" | grep -qE "^[[:space:]]*set [\$]target[[:space:]]+${service}:"; then
+        if printf '%s\n' "${vhost_content}" | grep -qE "^[[:space:]]*set[[:space:]]+[\$]target[[:space:]]+${blue_re}:"; then
             echo "blue"
             return 0
         fi
@@ -331,7 +327,9 @@ _rollout_vhost_target() {
     # retornar rc!=0 (o rightmost nonzero) — sem a defesa, a atribuicao mata o
     # shell antes do `[[ -z ... ]] && return 1` seguinte sequer rodar.
     local line_num
-    line_num="$(printf '%s\n' "${content}" | grep -nE "^[[:space:]]*set [\$]target[[:space:]]+${alias}:" | head -1 | cut -d: -f1)" || true
+    local alias_re
+    alias_re="$(vhost_regex_escape "${alias}")"
+    line_num="$(printf '%s\n' "${content}" | grep -nE "^[[:space:]]*set[[:space:]]+[\$]target[[:space:]]+${alias_re}:" | head -1 | cut -d: -f1)" || true
     [[ -z "${line_num}" ]] && return 1
 
     local port
@@ -499,13 +497,13 @@ _rollout_probe_http() {
 
     if docker exec "${probe}" sh -c 'command -v curl' >/dev/null 2>&1; then
         local code
-        code="$(docker exec "${probe}" curl -sS -k --max-time "${max_time}" -o /dev/null -w '%{http_code}' "${url}" 2>/dev/null)"
+        code="$(docker exec "${probe}" curl -sS -k --max-time "${max_time}" -H "Host: ${DOMAIN_NAME}" -o /dev/null -w '%{http_code}' "${url}" 2>/dev/null)"
         [[ "${code}" =~ ^2[0-9][0-9]$ ]]
         return $?
     fi
 
     if docker exec "${probe}" sh -c 'command -v wget' >/dev/null 2>&1; then
-        docker exec "${probe}" wget -q -O /dev/null --no-check-certificate -T "${max_time}" "${url}"
+        docker exec "${probe}" wget -q -O /dev/null --no-check-certificate -T "${max_time}" --header="Host: ${DOMAIN_NAME}" "${url}"
         return $?
     fi
 
@@ -682,6 +680,11 @@ _rollout_preflight() {
         return 1
     fi
 
+    if [[ -z "${CCTL_PROJECT_NETWORK:-}" ]]; then
+        log_error "Instancia sem rede do cctl (CCTL_PROJECT_NETWORK ausente no .env) — o rollout usa o alvo <container>.<rede>. Reinstale com a versao atual do cctl ('cctl destroy' e 'cctl install')."
+        return 1
+    fi
+
     if [[ "${require_vhost}" == "true" ]]; then
         local vhost="${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf"
         if [[ ! -f "${vhost}" ]]; then
@@ -718,13 +721,10 @@ rollout_bluegreen() {
     local vhost="${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf"
 
     local project_network
-    project_network="$(_rollout_project_network)" || true
-    # "(A && B) || true": se B (network_connect_nginx) falhar, A&&B como um
-    # todo falha — sob `set -e` de producao isso e um comando solto (nao
-    # protegido por if/while), entao sem o "|| true" externo o shell morre
-    # aqui numa falha tolerada (rede ja conectada, ou nao encontrada agora e
-    # reconectada em outra tentativa).
-    [[ -n "${project_network}" ]] && network_connect_nginx "${project_network}" || true
+    project_network="$(_rollout_project_network)"
+    if [[ -n "${project_network}" ]]; then
+        network_ensure_nginx_connected "${project_network}" "${DOMAIN_NAME:-}" || return 1
+    fi
 
     local live_slot candidate_slot
     live_slot="$(_rollout_resolve_live_slot "${service}")"
@@ -769,11 +769,38 @@ rollout_bluegreen() {
         return 1
     fi
 
+    # Antes de mexer no vhost: a resolucao de <container>-green.<rede> nao
+    # depende do vhost, entao ja da para saber se o alvo novo aponta para o
+    # candidato. Falhou -> aborta sem tocar no vhost.
+    if ! network_check_target "${candidate_alias}" "${CCTL_PROJECT_NETWORK}"; then
+        log_error "O alvo do candidato nao resolve para o container dele — abortando antes de trocar o vhost: trafego permanece no slot ${live_slot}."
+        _rollout_discard_candidate "${service}" "${candidate_slot}"
+        return 1
+    fi
+
     msg_success "Healthcheck OK — trocando o trafego para o slot ${candidate_slot}"
 
     if ! _rollout_switch_vhost "${vhost}" "${live_alias}" "${candidate_alias}"; then
         log_error "Falha ao aplicar a nova configuracao nginx — trafego permanece no slot ${live_slot}."
         _rollout_discard_candidate "${service}" "${candidate_slot}"
+        return 1
+    fi
+
+    # Conferencia pos-troca: de dentro do proxy, o alvo novo tem de resolver
+    # para o IP do candidato NESTA rede. Se nao, volta o vhost ao slot anterior
+    # (o trafego nunca fica num alvo que nao resolve ou resolve para outro
+    # container).
+    if ! network_check_target "${candidate_alias}" "${CCTL_PROJECT_NETWORK}"; then
+        log_error "O alvo novo do vhost nao resolve para o candidato apos a troca — revertendo o vhost."
+        if _rollout_switch_vhost "${vhost}" "${candidate_alias}" "${live_alias}"; then
+            log_error "Vhost revertido: trafego permanece no slot ${live_slot}."
+            _rollout_discard_candidate "${service}" "${candidate_slot}"
+        else
+            # Reversao falhou: o vhost pode estar apontando para o candidato.
+            # NAO descarta o candidato (seria derrubar o alvo ativo) e nao
+            # afirma onde esta o trafego.
+            log_error "FALHA AO REVERTER o vhost ${vhost}. O alvo ATIVO pode ser '${candidate_alias}' (slot ${candidate_slot}) e o container candidato foi MANTIDO. Reverta a mao: edite ${vhost}, troque 'set \$target ${candidate_alias}:' por 'set \$target ${live_alias}:' e rode 'cctl proxy reload'; depois confira com 'cctl rollout status'."
+        fi
         return 1
     fi
 
@@ -854,7 +881,12 @@ rollout_rolling() {
     local live_slot
     live_slot="$(_rollout_resolve_live_slot "${service}")"
     if [[ "${live_slot}" != "blue" ]]; then
-        log_error "Rollout 'rolling' opera apenas o slot do compose ('${service}', slot blue) — o slot live atual e '${live_slot}' (trafego no alias '${service}-green'). Rode 'cctl rollout bluegreen' para alternar o trafego de volta ao slot blue antes de usar 'rolling', ou, se so quer subir uma imagem nova, use 'cctl rollout bluegreen --image <ref>' diretamente (resolve em um unico passo)."
+        log_error "Rollout 'rolling' opera apenas o slot do compose ('${service}', slot blue) — o slot live atual e '${live_slot}' (trafego no alvo '$(_rollout_slot_alias "${service}" green)'). Rode 'cctl rollout bluegreen' para alternar o trafego de volta ao slot blue antes de usar 'rolling', ou, se so quer subir uma imagem nova, use 'cctl rollout bluegreen --image <ref>' diretamente (resolve em um unico passo)."
+        return 1
+    fi
+
+    if ! network_ensure_nginx_connected "${CCTL_PROJECT_NETWORK}" "${DOMAIN_NAME:-}"; then
+        log_error "Rollout interrompido: o nginx-proxy nao esta conectado a rede ${CCTL_PROJECT_NETWORK}."
         return 1
     fi
 
@@ -866,7 +898,8 @@ rollout_rolling() {
     # do container novo — vem do vhost existente ou de --health-port) para
     # poder validar e falhar cedo, sem gastar um `up`+timeout inteiro numa
     # combinacao que ja sabemos que nao vai funcionar.
-    local alias="${service}"
+    local alias
+    alias="$(_rollout_slot_alias "${service}" blue)"
     local scheme="http"
     local port="${RO_HEALTH_PORT}"
     local vhost="${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf"

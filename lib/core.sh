@@ -232,6 +232,11 @@ core_load_manifest() {
         source "${manifest}"
         set +a
         log_debug "Manifest carregado: ${manifest} (PROJECT_TYPE=${PROJECT_TYPE:-?})"
+
+        # Manifest antigo: a faixa de rede deixou de ser definida por projeto.
+        if [[ -n "${SUBNET_RANGE:-}" || -n "${SUBNET_PREFIX_LEN:-}" ]]; then
+            log_warn "project.conf define SUBNET_RANGE/SUBNET_PREFIX_LEN, mas isso agora e ignorado: quem manda e o cctl.conf (CCTL_NETWORK_RANGE=${CCTL_NETWORK_RANGE:-?}, CCTL_NETWORK_PREFIX=${CCTL_NETWORK_PREFIX:-?}). Pode remover essas linhas do project.conf."
+        fi
     fi
 }
 

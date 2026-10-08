@@ -10,7 +10,7 @@ server {
 
 	location / {
 		resolver 127.0.0.11;
-		set $target moodle-app:80;
+		set $target {{COMPOSE_PROJECT_NAME}}-moodle-app.{{CCTL_PROJECT_NETWORK}}:80;
 		proxy_pass http://$target;
 		proxy_set_header        Host                    $http_host;
 		proxy_set_header        X-Real-IP               $remote_addr;
