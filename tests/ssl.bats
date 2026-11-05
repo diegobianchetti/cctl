@@ -226,12 +226,21 @@ teardown() {
     assert_success
 }
 
-@test "ssl_issue: self-signed pula dominios locais" {
+@test "ssl_issue: self-signed gera e instala certificados para dominios locais" {
     export SSL_MODE="self-signed"
 
-    run ssl_issue "localhost"
-    assert_success
-    [[ ! -d "${LETSENCRYPT_DIR}" ]]
+    local domain dest
+    for domain in localhost app.local app.test; do
+        run ssl_issue "${domain}"
+        assert_success
+
+        dest="${LETSENCRYPT_DIR}/${domain}"
+        [[ -f "${dest}/fullchain.pem" ]]
+        [[ -f "${dest}/privkey.pem" ]]
+        assert_equal "$(stat -c '%a' "${dest}/privkey.pem")" "600"
+        run _ssl_keypair_matches "${dest}/fullchain.pem" "${dest}/privkey.pem"
+        assert_success
+    done
 }
 
 @test "ssl_renew: self-signed regenera o par de chaves" {
@@ -285,6 +294,19 @@ teardown() {
     local dest="${LETSENCRYPT_DIR}/app.example.com"
     [[ -f "${dest}/fullchain.pem" ]]
     [[ -f "${dest}/privkey.pem" ]]
+}
+
+@test "ssl_issue: manual instala certificado para dominio local" {
+    export SSL_MODE="manual"
+    make_test_keypair "${WORKDIR}/cert.pem" "${WORKDIR}/key.pem" "app.local"
+    export SSL_CERT_FILE="${WORKDIR}/cert.pem"
+    export SSL_KEY_FILE="${WORKDIR}/key.pem"
+
+    run ssl_issue "app.local"
+    assert_success
+
+    [[ -f "${LETSENCRYPT_DIR}/app.local/fullchain.pem" ]]
+    [[ -f "${LETSENCRYPT_DIR}/app.local/privkey.pem" ]]
 }
 
 @test "ssl_issue: manual aborta quando o par de chaves nao bate (mismatch)" {
@@ -430,6 +452,17 @@ _mock_docker_ssl() {
         fi
         exit 0
     '
+}
+
+@test "ssl_issue: letsencrypt rejeita dominio local sem chamar docker ou certbot" {
+    export SSL_MODE="letsencrypt"
+    _mock_docker_ssl
+
+    run ssl_issue "app.local"
+    assert_failure
+    assert_output --partial "Let's Encrypt nao emite certificado para dominio local app.local"
+    assert_output --partial "use SSL_MODE=self-signed, manual ou none"
+    [[ ! -e "${WORKDIR}/docker.log" ]]
 }
 
 @test "ssl_issue: letsencrypt chama certbot via docker exec (nao mais no host) e recarrega o nginx" {

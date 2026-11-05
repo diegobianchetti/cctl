@@ -7,7 +7,7 @@ setup() {
     load 'helpers/common'
     load_bats_libs
     setup_mock_bin
-    source_lib colors.sh log.sh core.sh inventory.sh network.sh validate.sh
+    source_lib colors.sh log.sh core.sh inventory.sh network.sh ssl.sh validate.sh
     setup_network_env
     # sudo funcional por padrao; testes especificos sobrescrevem
     core_sudo_check() { return 0; }
@@ -353,6 +353,91 @@ EOF
 }
 
 # --- validate_preflight_install / severidade do DNS por SSL_MODE ----------
+
+setup_preflight_success_mocks() {
+    mock_cmd docker '
+        case "$1 $2" in
+            "info "*|"info") exit 0 ;;
+            "compose version") exit 0 ;;
+            *) exit 0 ;;
+        esac
+    '
+}
+
+@test "validate_preflight_install: letsencrypt + dominio local falha com orientacao" {
+    setup_preflight_success_mocks
+    DOMAIN_NAME="app.local"
+    HOST_SSL="true"
+    SSL_MODE="letsencrypt"
+
+    run validate_preflight_install
+    assert_failure
+    assert_output --partial "Let's Encrypt nao emite certificado para dominio local app.local"
+    assert_output --partial "use SSL_MODE=self-signed, manual ou none"
+}
+
+@test "validate_preflight_install: self-signed + dominio local passa" {
+    setup_preflight_success_mocks
+    DOMAIN_NAME="app.local"
+    HOST_SSL="true"
+    SSL_MODE="self-signed"
+
+    run validate_preflight_install
+    assert_success
+}
+
+@test "validate_preflight_install: HOST_SSL=false + dominio local passa" {
+    setup_preflight_success_mocks
+    DOMAIN_NAME="app.local"
+    HOST_SSL="false"
+    SSL_MODE="letsencrypt"
+
+    run validate_preflight_install
+    assert_success
+}
+
+@test "validate_preflight_install: HOST_SSL ausente + letsencrypt + dominio local passa (default do install)" {
+    setup_preflight_success_mocks
+    DOMAIN_NAME="app.local"
+    unset HOST_SSL
+    SSL_MODE="letsencrypt"
+
+    run validate_preflight_install
+    assert_success
+    refute_output --partial "Let's Encrypt nao emite certificado"
+}
+
+@test "validate_preflight_install: HOST_SSL vazio + SSL_MODE vazio + dominio local passa" {
+    setup_preflight_success_mocks
+    DOMAIN_NAME="app.local"
+    HOST_SSL=""
+    SSL_MODE=""
+
+    run validate_preflight_install
+    assert_success
+    refute_output --partial "Let's Encrypt nao emite certificado"
+}
+
+@test "validate_preflight_install: SSL_MODE=none + dominio local passa" {
+    setup_preflight_success_mocks
+    DOMAIN_NAME="app.local"
+    HOST_SSL="true"
+    SSL_MODE="none"
+
+    run validate_preflight_install
+    assert_success
+}
+
+@test "validate_preflight_install: letsencrypt + dominio nao local resolvido passa" {
+    setup_preflight_success_mocks
+    mock_cmd host 'exit 0'
+    DOMAIN_NAME="app.example.com"
+    HOST_SSL="true"
+    SSL_MODE="letsencrypt"
+
+    run validate_preflight_install
+    assert_success
+}
 
 @test "validate_preflight_install: DNS nao resolve + SSL_MODE=self-signed -> passa (aviso, nao erro)" {
     mock_cmd docker '

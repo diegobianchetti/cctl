@@ -281,7 +281,13 @@ validate_preflight_install() {
     fi
 
     if [[ -n "${DOMAIN_NAME:-}" ]]; then
-        if validate_dns "${DOMAIN_NAME}"; then
+        # Default de HOST_SSL igual ao do install (commands/install.sh): ausente
+        # ou vazio = SSL desabilitado, nenhum certificado sera emitido.
+        if [[ "${HOST_SSL:-false}" == "true" && "${SSL_MODE:-letsencrypt}" == "letsencrypt" ]] \
+            && _ssl_is_local_domain "${DOMAIN_NAME}"; then
+            log_error "Let's Encrypt nao emite certificado para dominio local ${DOMAIN_NAME}; use SSL_MODE=self-signed, manual ou none"
+            ((errors++))
+        elif validate_dns "${DOMAIN_NAME}"; then
             msg_success "DNS (${DOMAIN_NAME})"
         elif [[ "${SSL_MODE:-letsencrypt}" == "letsencrypt" ]]; then
             log_error "DNS de '${DOMAIN_NAME}' nao resolve — obrigatorio para SSL_MODE=letsencrypt (desafio ACME)."
