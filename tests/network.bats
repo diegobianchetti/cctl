@@ -1032,3 +1032,426 @@ EOF
     run network_check_vhost_targets "${WORKDIR}/acme.conf" "app_net"
     assert_success
 }
+
+# C1 — consulta de objeto separa presente, ausente e falha operacional.
+@test "docker_object_state: compara nome literalmente; presente e ausente retornam rc 0" {
+    netsim_add_network "app.net" "" "10.240.0.0/24"
+
+    run docker_object_state network "app.net"
+    assert_success
+    assert_output "present"
+
+    run docker_object_state network "app"
+    assert_success
+    assert_output "absent"
+
+    run docker_object_state container "container-ausente"
+    assert_success
+    assert_output "absent"
+
+    mock_cmd docker '[[ "$1 $2" == "volume ls" ]] && exit 0; exit 42'
+    run docker_object_state volume "volume-ausente"
+    assert_success
+    assert_output "absent"
+}
+
+@test "docker_object_state: falha de consulta retorna rc 2 sem stdout" {
+    mock_cmd docker 'echo "falha parcial"; exit 42'
+    run docker_object_state network "app.net"
+    [ "$status" -eq 2 ]
+    assert_output ""
+}
+
+@test "docker_object_state: sob shell estrito, falha de Docker retorna 2 sem abortar antes" {
+    mock_cmd docker 'echo "falha parcial"; exit 42'
+
+    run bash -c 'set -euo pipefail
+        source "'"${CCTL_ROOT}"'/lib/network.sh"
+        if state=$(docker_object_state network app.net); then
+            exit 1
+        else
+            rc=$?
+        fi
+        [[ ${rc} -eq 2 && -z ${state} ]]'
+    assert_success
+    assert_output ""
+}
+
+@test "docker_object_state: container parado conta via ps -a e argv e registrado" {
+    netsim_add_container "app.parado" "app_net" "10.240.0.9"
+    run docker_object_state container "app.parado"
+    assert_success
+    assert_output "present"
+    grep -qxF "docker ps -a --format {{.Names}}" "${WORKDIR}/docker_calls.log"
+}
+
+@test "C2 provision: consulta parcial com erro nao vira rede ausente nem cria" {
+    mock_cmd docker '
+        echo "docker $*" >> "'"${WORKDIR}"'/docker_calls.log"
+        [[ "$1 $2" == "network ls" ]] && { echo "app_net"; exit 42; }
+        exit 0
+    '
+
+    run network_provision_for_install
+    assert_failure
+    assert_output --partial "Nao consegui consultar a rede Docker app_net"
+    run grep -q "network create" "${WORKDIR}/docker_calls.log"
+    assert_failure
+}
+
+@test "C3 allocate: listagem Docker parcial com erro aborta sob shell estrito" {
+    mock_cmd docker '
+        [[ "$1 $2" == "network ls" ]] && { echo "id-parcial"; exit 42; }
+        exit 0
+    '
+
+    run bash -c 'set -euo pipefail
+        source "'"${CCTL_ROOT}"'/lib/colors.sh"
+        source "'"${CCTL_ROOT}"'/lib/log.sh"
+        source "'"${CCTL_ROOT}"'/lib/core.sh"
+        source "'"${CCTL_ROOT}"'/lib/env.sh"
+        source "'"${CCTL_ROOT}"'/lib/inventory.sh"
+        source "'"${CCTL_ROOT}"'/lib/network.sh"
+        network_allocate_subnet app'
+    assert_failure
+    assert_output --partial "Nao consegui enumerar faixas em uso"
+}
+
+@test "C3 inventario estrito: diretorio ausente e vazio" {
+    run network_inventory_ranges_strict "app"
+    assert_success
+    assert_output ""
+}
+
+@test "N3 inventario estrito: dois niveis ausentes sob ancestral acessivel sao vazios e alocacao prossegue" {
+    local base="${WORKDIR}/base-acessivel"
+    mkdir -p "${base}"
+    export CCTL_INVENTORY_DIR="${base}/novo/.inventory"
+
+    run network_inventory_ranges_strict "app"
+    assert_success
+    assert_output ""
+    [[ ! -e "${base}/novo" ]]
+
+    run network_allocate_subnet "app"
+    assert_success
+    assert_output "10.240.0.0/24"
+    [[ ! -e "${base}/novo" ]]
+}
+
+@test "C3 inventario estrito: diretorio sem acesso aborta antes de listar" {
+    mkdir -p "${CCTL_INVENTORY_DIR}"
+    _network_inventory_dir_accessible() { return 1; }
+    _network_inventory_tsv_listing() { echo "nao-deve-listar" >&2; return 99; }
+
+    run network_inventory_ranges_strict "app"
+    assert_failure
+    assert_output --partial "Nao foi possivel acessar o diretorio de inventario"
+}
+
+@test "B2 inventario estrito: ancestral sem travessia nao vira inventario ausente" {
+    [[ ${EUID} -ne 0 ]] || skip "permissoes de ancestral nao discriminam sob root"
+    local blocked="${WORKDIR}/ancestral-sem-x"
+    mkdir -p "${blocked}/inventory"
+    export CCTL_INVENTORY_DIR="${blocked}/inventory"
+    chmod 000 "${blocked}"
+
+    run network_inventory_ranges_strict "app"
+    local rc=${status}
+    chmod 700 "${blocked}"
+
+    [[ ${rc} -ne 0 ]]
+    assert_output --partial "ancestral do diretorio de inventario"
+}
+
+@test "C3 inventario estrito: registro corrompido e fatal para o alocador" {
+    mkdir -p "${CCTL_INVENTORY_DIR}"
+    printf 'PROJECT_NAME\tquebrado\n' > "${CCTL_INVENTORY_DIR}/quebrado.tsv"
+
+    run network_allocate_subnet "app"
+    assert_failure
+    assert_output --partial "Registro de inventario corrompido"
+    run ! grep -q "network create" "${WORKDIR}/docker_calls.log"
+}
+
+@test "C3 inventario estrito: listagem parcial com erro aborta sem usar registro parcial" {
+    mkdir -p "${CCTL_INVENTORY_DIR}"
+    inventory_mark_prepared "parado" "moodle" "c" "parado.example.com" "${WORKDIR}/instances/parado"
+    inventory_set_network "parado" "parado_net" "10.240.0.0/24"
+    _network_inventory_tsv_listing() {
+        printf 'parado.tsv\n'
+        echo "erro apos parcial" >&2
+        return 42
+    }
+
+    run network_allocate_subnet "app"
+    assert_failure
+    assert_output --partial "Nao foi possivel listar o inventario"
+    run ! grep -q "network create" "${WORKDIR}/docker_calls.log"
+}
+
+@test "N4 inventario por link: reserva valida entra no produtor e alocador pula faixa" {
+    local target="${WORKDIR}/inventory-real" link="${WORKDIR}/inventory-link"
+    mkdir -p "${target}"
+    export CCTL_INVENTORY_DIR="${target}"
+    inventory_mark_prepared "reservado" "moodle" "cliente" "reservado.example.com" "${WORKDIR}/instances/reservado"
+    inventory_set_network "reservado" "reservado_net" "10.240.0.0/24"
+    ln -s "${target}" "${link}"
+    export CCTL_INVENTORY_DIR="${link}"
+
+    run network_inventory_ranges_strict "app"
+    assert_success
+    assert_output $'10.240.0.0/24\treservada pelo projeto reservado no inventario'
+
+    run network_allocate_subnet "app"
+    assert_success
+    assert_output "10.240.1.0/24"
+}
+
+@test "N5 inventario TSV por link le registro regular e alocador pula reserva" {
+    local target="${WORKDIR}/reservas-fora-inventario.tsv"
+    mkdir -p "${CCTL_INVENTORY_DIR}"
+    inventory_mark_prepared "reservado" "moodle" "cliente" "reservado.example.com" "${WORKDIR}/instances/reservado"
+    inventory_set_network "reservado" "reservado_net" "10.240.0.0/24"
+    mv "${CCTL_INVENTORY_DIR}/reservado.tsv" "${target}"
+    ln -s "${target}" "${CCTL_INVENTORY_DIR}/reservado.tsv"
+
+    run network_inventory_ranges_strict "app"
+    assert_success
+    assert_output $'10.240.0.0/24\treservada pelo projeto reservado no inventario'
+
+    run network_allocate_subnet "app"
+    assert_success
+    assert_output "10.240.1.0/24"
+}
+
+@test "N5 inventario TSV por link pendente falha produtor e alocador" {
+    mkdir -p "${CCTL_INVENTORY_DIR}"
+    ln -s "${WORKDIR}/alvo-tsv-inexistente" "${CCTL_INVENTORY_DIR}/pendente.tsv"
+
+    run network_inventory_ranges_strict "app"
+    assert_failure
+    assert_output --partial "Registro de inventario ilegivel"
+
+    run network_allocate_subnet "app"
+    assert_failure
+    assert_output --partial "Nao consegui enumerar faixas em uso"
+    refute_output --partial "10.240.0.0/24"
+}
+
+@test "N5 inventario TSV por link para diretorio falha produtor e alocador" {
+    mkdir -p "${CCTL_INVENTORY_DIR}" "${WORKDIR}/alvo-tsv-diretorio"
+    ln -s "${WORKDIR}/alvo-tsv-diretorio" "${CCTL_INVENTORY_DIR}/diretorio.tsv"
+
+    run network_inventory_ranges_strict "app"
+    assert_failure
+    assert_output --partial "Registro de inventario ilegivel"
+
+    run network_allocate_subnet "app"
+    assert_failure
+    assert_output --partial "Nao consegui enumerar faixas em uso"
+    refute_output --partial "10.240.0.0/24"
+}
+
+@test "N4 inventario por componente link com alvo atras de ancestral sem travessia aborta" {
+    [[ ${EUID} -ne 0 ]] || skip "permissoes de ancestral nao discriminam sob root"
+    local blocked="${WORKDIR}/ancestral-sem-x" base="${WORKDIR}/base"
+    # Em local separado: o bash expande todas as atribuicoes de um mesmo local
+    # antes de executa-lo, e ${link} sairia vazio (inventario = /inventory).
+    local link="${base}/componente-link"
+    local inventory="${link}/inventory"
+    mkdir -p "${blocked}/alvo-existente/inventory" "${base}"
+    ln -s "${blocked}/alvo-existente" "${link}"
+    export CCTL_INVENTORY_DIR="${inventory}"
+    chmod 000 "${blocked}"
+    [[ ! -e "${link}" ]]
+    [[ -L "${link}" ]]
+    [[ -x "${base}" ]]
+
+    run network_inventory_ranges_strict "app"
+    local strict_rc=${status}
+    chmod 700 "${blocked}"
+    [[ ${strict_rc} -ne 0 ]]
+    assert_output --partial "ancestral do diretorio de inventario"
+
+    chmod 000 "${blocked}"
+    run network_allocate_subnet "app"
+    local allocate_rc=${status}
+    chmod 700 "${blocked}"
+    [[ ${allocate_rc} -ne 0 ]]
+    assert_output --partial "Nao consegui enumerar faixas em uso"
+    refute_output --partial "10.240.0.0/24"
+}
+
+@test "N4 inventario por link final com alvo inacessivel aborta produtor e alocador" {
+    [[ ${EUID} -ne 0 ]] || skip "permissoes de ancestral nao discriminam sob root"
+    local blocked="${WORKDIR}/alvo-protegido" link="${WORKDIR}/inventory-link"
+    mkdir -p "${blocked}/inventory"
+    ln -s "${blocked}/inventory" "${link}"
+    export CCTL_INVENTORY_DIR="${link}"
+    chmod 000 "${blocked}"
+
+    run network_inventory_ranges_strict "app"
+    local strict_rc=${status}
+    chmod 700 "${blocked}"
+    [[ ${strict_rc} -ne 0 ]]
+    assert_output --partial "ancestral do diretorio de inventario"
+
+    chmod 000 "${blocked}"
+    run network_allocate_subnet "app"
+    local allocate_rc=${status}
+    chmod 700 "${blocked}"
+    [[ ${allocate_rc} -ne 0 ]]
+    assert_output --partial "Nao consegui enumerar faixas em uso"
+    refute_output --partial "10.240.0.0/24"
+}
+
+@test "N4 inventario por componente link com alvo inacessivel aborta produtor e alocador" {
+    [[ ${EUID} -ne 0 ]] || skip "permissoes de ancestral nao discriminam sob root"
+    local blocked="${WORKDIR}/alvo-protegido" base="${WORKDIR}/base"
+    local link="${base}/componente-link"
+    mkdir -p "${blocked}/inventory" "${base}"
+    ln -s "${blocked}" "${link}"
+    export CCTL_INVENTORY_DIR="${link}/inventory"
+    chmod 000 "${blocked}"
+
+    run network_inventory_ranges_strict "app"
+    local strict_rc=${status}
+    chmod 700 "${blocked}"
+    [[ ${strict_rc} -ne 0 ]]
+    assert_output --partial "ancestral do diretorio de inventario"
+
+    chmod 000 "${blocked}"
+    run network_allocate_subnet "app"
+    local allocate_rc=${status}
+    chmod 700 "${blocked}"
+    [[ ${allocate_rc} -ne 0 ]]
+    assert_output --partial "Nao consegui enumerar faixas em uso"
+    refute_output --partial "10.240.0.0/24"
+}
+
+@test "N4 inventario por link pendente nao vira diretorio ausente" {
+    local link="${WORKDIR}/inventory-pendente"
+    ln -s "${WORKDIR}/alvo-inexistente" "${link}"
+    export CCTL_INVENTORY_DIR="${link}"
+
+    run network_inventory_ranges_strict "app"
+    assert_failure
+    assert_output --partial "ancestral do diretorio de inventario"
+
+    run network_allocate_subnet "app"
+    assert_failure
+    assert_output --partial "Nao consegui enumerar faixas em uso"
+    refute_output --partial "10.240.0.0/24"
+}
+
+@test "N6 inventario por link final protegido com barra final falha produtor e alocador" {
+    [[ ${EUID} -ne 0 ]] || skip "permissoes de ancestral nao discriminam sob root"
+    local blocked="${WORKDIR}/n6-protegido"
+    local link="${WORKDIR}/n6-inventory-link"
+    mkdir -p "${blocked}/inventory"
+    ln -s "${blocked}/inventory" "${link}"
+    export CCTL_INVENTORY_DIR="${link}//"
+    chmod 000 "${blocked}"
+
+    run network_inventory_ranges_strict "app"
+    local strict_rc=${status}
+    chmod 700 "${blocked}"
+    [[ ${strict_rc} -ne 0 ]]
+    assert_output --partial "ancestral do diretorio de inventario"
+
+    chmod 000 "${blocked}"
+    run network_allocate_subnet "app"
+    local allocate_rc=${status}
+    chmod 700 "${blocked}"
+    [[ ${allocate_rc} -ne 0 ]]
+    assert_output --partial "Nao consegui enumerar faixas em uso"
+    refute_output --partial "10.240.0.0/24"
+}
+
+@test "N6 inventario por link pendente com barra final falha produtor e alocador" {
+    local link="${WORKDIR}/n6-pendente"
+    ln -s "${WORKDIR}/n6-alvo-inexistente" "${link}"
+    export CCTL_INVENTORY_DIR="${link}/"
+
+    run network_inventory_ranges_strict "app"
+    assert_failure
+    assert_output --partial "ancestral do diretorio de inventario"
+
+    run network_allocate_subnet "app"
+    assert_failure
+    assert_output --partial "Nao consegui enumerar faixas em uso"
+    refute_output --partial "10.240.0.0/24"
+}
+
+@test "N6 inventario por link para arquivo com barra final falha produtor e alocador" {
+    local target="${WORKDIR}/n6-arquivo"
+    local link="${WORKDIR}/n6-arquivo-link"
+    : > "${target}"
+    ln -s "${target}" "${link}"
+    export CCTL_INVENTORY_DIR="${link}//"
+
+    run network_inventory_ranges_strict "app"
+    assert_failure
+    assert_output --partial "diretorio de inventario"
+
+    run network_allocate_subnet "app"
+    assert_failure
+    assert_output --partial "Nao consegui enumerar faixas em uso"
+    refute_output --partial "10.240.0.0/24"
+}
+
+@test "N6 inventario por link legivel com barra final lista reserva e pula faixa" {
+    local target="${WORKDIR}/n6-inventory-real"
+    local link="${WORKDIR}/n6-inventory-link"
+    mkdir -p "${target}"
+    export CCTL_INVENTORY_DIR="${target}"
+    inventory_mark_prepared "reservado" "moodle" "cliente" "reservado.example.com" "${WORKDIR}/instances/reservado"
+    inventory_set_network "reservado" "reservado_net" "10.240.0.0/24"
+    ln -s "${target}" "${link}"
+    export CCTL_INVENTORY_DIR="${link}//"
+
+    run network_inventory_ranges_strict "app"
+    assert_success
+    assert_output $'10.240.0.0/24\treservada pelo projeto reservado no inventario'
+
+    run network_allocate_subnet "app"
+    assert_success
+    assert_output "10.240.1.0/24"
+}
+
+@test "N6 ausencia ordinaria multinivel com barra final continua vazia" {
+    export CCTL_INVENTORY_DIR="${WORKDIR}/ausente/nivel/inventory//"
+
+    run network_inventory_ranges_strict "app"
+    assert_success
+    assert_output ""
+
+    run network_allocate_subnet "app"
+    assert_success
+    assert_output "10.240.0.0/24"
+}
+
+@test "B3 ensure nginx: primeira consulta transitória falha sem network connect" {
+    local calls="${WORKDIR}/proxy-query-count"
+    mock_cmd docker '
+        echo "docker $*" >> "'"${WORKDIR}"'/docker_calls.log"
+        if [[ "$1" == "ps" ]]; then
+            n=0; [[ -f "'"${calls}"'" ]] && n=$(<"'"${calls}"'")
+            n=$((n + 1)); printf "%s" "${n}" > "'"${calls}"'"
+            [[ ${n} -eq 1 ]] && { echo "transporte indisponivel" >&2; exit 42; }
+            echo "nginx-proxy"; exit 0
+        fi
+        if [[ "$1" == "inspect" ]]; then echo "app_net"; exit 0; fi
+        exit 0
+    '
+
+    run network_ensure_nginx_connected "app_net" "app.example.com"
+    assert_failure
+    assert_output --partial "conexao nao foi tentada"
+    run grep -q "network connect" "${WORKDIR}/docker_calls.log"
+    assert_failure
+
+    run network_proxy_connected "app_net"
+    assert_success
+}

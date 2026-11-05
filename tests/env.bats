@@ -114,3 +114,104 @@ EOF
     run env_set_var CHAVE "valor"
     assert_failure
 }
+
+@test "env_set_var: preserva valor literal com * | e & e atualiza duplicatas" {
+    printf 'SENHA=antiga\nOUTRA=ok\nSENHA=velha\n' > .env
+    run env_set_var SENHA 'a*|&\\fim'
+    assert_success
+    run grep -cF 'SENHA=a*|&\\fim' .env
+    assert_output "2"
+}
+
+@test "env_set_var: recusa chave invalida e valor multilinha sem exportar" {
+    printf 'OK=antes\n' > .env
+    unset OK
+    local rc
+    if env_set_var 'NAO-VALE' valor; then return 1; else rc=$?; fi
+    [[ ${rc} -eq 1 ]]
+    if env_set_var OK $'uma\nduas'; then return 1; else rc=$?; fi
+    [[ ${rc} -eq 1 ]]
+    [[ "${OK:-}" != $'uma\nduas' ]]
+    run grep -c '^OK=antes$' .env
+    assert_output "1"
+}
+
+@test "env_set_var: mv recusado falha, limpa temporario e nao exporta nem altera o arquivo" {
+    printf 'SEGREDO=antes\n' > .env
+    cp .env original.env
+    unset SEGREDO
+    mv() { return 1; }
+
+    local rc
+    if env_set_var SEGREDO 'a*|&\\fim'; then
+        return 1
+    else
+        rc=$?
+    fi
+    [[ ${rc} -eq 1 ]]
+    [[ "${SEGREDO:-}" != 'a*|&\\fim' ]]
+    cmp -s original.env .env
+    ! compgen -G '.env.cctl.*' > /dev/null
+}
+
+@test "env_set_var: escrita rc 0 sem efeito preserva destino, limpa temporario e nao exporta" {
+    printf 'SEGREDO=antes\n' > .env
+    cp .env original.env
+    unset SEGREDO
+    mv() {
+        local dest="${!#}" source
+        source="${@: -2:1}"
+        printf '%s\n' "$@" > mv.argv
+        [[ "$1" == "-f" && "${source}" == ./.env.cctl.* && "${dest}" == "./.env" ]] || return 99
+        return 0
+    }
+
+    local rc
+    if env_set_var SEGREDO 'a*|&\\fim'; then
+        return 1
+    else
+        rc=$?
+    fi
+    [[ ${rc} -eq 1 ]]
+    local -a mv_argv
+    mapfile -t mv_argv < mv.argv
+    [[ ${#mv_argv[@]} -eq 3 ]]
+    [[ "${mv_argv[0]}" == "-f" ]]
+    [[ "${mv_argv[1]}" == ./.env.cctl.* ]]
+    [[ "${mv_argv[2]}" == "./.env" ]]
+    [[ "${SEGREDO:-}" != 'a*|&\\fim' ]]
+    cmp -s original.env .env
+    ! compgen -G '.env.cctl.*' > /dev/null
+}
+
+@test "B1 env_set_var: leitura real recusada preserva bytes, limpa temporario e nao exporta" {
+    printf 'MANTER=segredo\nOUTRA=valor\n' > .env
+    cp .env original.env
+    unset NOVA
+    chmod 000 .env
+
+    local rc
+    if env_set_var NOVA valor; then
+        chmod 600 .env
+        return 1
+    else
+        rc=$?
+    fi
+    chmod 600 .env
+
+    [[ ${rc} -eq 1 ]]
+    cmp -s original.env .env
+    [[ "${NOVA:-}" != "valor" ]]
+    ! compgen -G '.env.cctl.*' > /dev/null
+}
+
+@test "env_set_var: recusa .env symlink sem alterar o alvo" {
+    printf 'SEGREDO=antes\n' > alvo.env
+    ln -s alvo.env .env
+
+    run env_set_var SEGREDO depois
+    assert_failure
+    assert_output --partial "nao pode ser symlink"
+    run grep '^SEGREDO=' alvo.env
+    assert_output "SEGREDO=antes"
+}

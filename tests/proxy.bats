@@ -62,6 +62,16 @@ _mock_docker_proxy() {
                         ;;
                 esac
                 ;;
+            ps)
+                state="'"${DOCKER_CONTAINER_STATE:-}"'"
+                for arg in "$@"; do
+                    [[ "${arg}" == "-a" ]] || continue
+                    [[ "'"${DOCKER_PS_FAIL:-0}"'" == "1" ]] && { echo "lista parcial"; exit 42; }
+                    [[ -n "${state}" ]] && echo "nginx-proxy"
+                    exit 0
+                done
+                exit 0
+                ;;
             inspect)
                 state="'"${DOCKER_CONTAINER_STATE:-}"'"
                 [[ -z "${state}" ]] && exit 1
@@ -423,6 +433,38 @@ _mock_docker_proxy() {
     run nginx_proxy_down
     assert_failure
     assert_output --partial "Falha ao remover o container"
+}
+
+@test "C2 proxy down: consulta parcial do container nao vira ausencia nem para ou remove" {
+    DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="running" DOCKER_PS_FAIL=1 _mock_docker_proxy
+
+    run nginx_proxy_down
+    assert_failure
+    assert_output --partial "Nao consegui consultar o container nginx-proxy"
+    grep -qxF "ps -a --format {{.Names}}" "${WORKDIR}/docker.log"
+    run grep -qE "^(stop|rm) " "${WORKDIR}/docker.log"
+    assert_failure
+}
+
+@test "C2 connect nginx: consulta parcial do container nao vira proxy ausente nem conecta" {
+    DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="running" DOCKER_PS_FAIL=1 _mock_docker_proxy
+
+    run network_connect_nginx "app_net" "app.example.com"
+    assert_failure
+    assert_output --partial "Nao consegui consultar o nginx-proxy"
+    grep -qxF "ps -a --format {{.Names}}" "${WORKDIR}/docker.log"
+    run grep -q "^network connect " "${WORKDIR}/docker.log"
+    assert_failure
+}
+
+@test "C2 proxy connected: consulta parcial do container retorna 2" {
+    DOCKER_NETWORK_EXISTS=1 DOCKER_CONTAINER_STATE="running" DOCKER_PS_FAIL=1 _mock_docker_proxy
+
+    run network_proxy_connected "app_net"
+    [ "${status}" -eq 2 ]
+    grep -qxF "ps -a --format {{.Names}}" "${WORKDIR}/docker.log"
+    run grep -q "^inspect " "${WORKDIR}/docker.log"
+    assert_failure
 }
 
 # --- _proxy_compose_render: teste de contrato (D-F2.3-e, R8) ----------------

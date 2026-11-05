@@ -180,6 +180,14 @@ _mock_docker_rollout() {
                     *) exit 0 ;;
                 esac
                 ;;
+            ps)
+                # C1 consulta todos os containers, inclusive os parados; o
+                # mock so devolve esse estado quando o argv contem -a.
+                for arg in "$@"; do
+                    [[ "${arg}" == "-a" ]] && { printf "%s\n" ${CONTAINERS_EXIST:-}; exit 0; }
+                done
+                exit 0
+                ;;
             inspect)
                 shift
                 fmt=""
@@ -194,6 +202,7 @@ _mock_docker_rollout() {
                 if [[ "${exists}" != *" ${container} "* ]]; then
                     exit 1
                 fi
+                [[ "${HEALTH_INSPECT_FAIL_CONTAINER:-}" == "${container}" ]] && exit 1
                 [[ -z "${fmt}" ]] && exit 0
                 case "${fmt}" in
                     *"range \$k, \$v := .NetworkSettings.Networks"*)
@@ -530,6 +539,15 @@ _run_strict() {
 # =============================================================================
 # 4. Modos de healthcheck
 # =============================================================================
+
+@test "_rollout_health_wait: falha de inspect no auto nao cai para http" {
+    export HEALTH_INSPECT_FAIL_CONTAINER="testproj-moodle-app-green"
+    run _rollout_health_wait "testproj-moodle-app-green" alias 443 https / 0 1 auto nginx-proxy
+    assert_failure
+    assert_output --partial "Nao consegui consultar o container"
+    run grep -q "exec nginx-proxy curl" "${WORKDIR}/docker.log"
+    assert_failure
+}
 
 @test "bluegreen: healthcheck modo docker fica saudavel so apos N tentativas" {
     export HAS_DOCKER_HEALTHCHECK=1

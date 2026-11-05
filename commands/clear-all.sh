@@ -49,7 +49,11 @@ cmd_clear-all() {
     # Etapa 2/6: Volumes
     msg_step "ETAPA 2/6" "Removendo volumes..."
     local volumes
-    volumes=$(volumes_list_for_project "${project_name}")
+    if ! volumes=$(volumes_list_for_project "${project_name}"); then
+        teardown_incomplete=true
+        msg_warn "Nao foi possivel listar volumes; nenhuma remocao foi tentada."
+        volumes=""
+    fi
     if [[ -n "${volumes}" ]]; then
         echo -e "${BLUE}Volumes encontrados (inclui volumes orfaos sem label do compose):${RESET}"
         echo "${volumes}" | sed 's/^/  - /'
@@ -82,9 +86,41 @@ cmd_clear-all() {
         fi
     else
         msg_info "Nenhuma rede registrada para o projeto (CCTL_PROJECT_NETWORK ausente no .env)"
-        if ! _clear_all_inventory_network "${project_name}"; then
+        # Um registro ainda pode ter uma reserva de versao anterior. Nao a
+        # apagamos sem antes confirmar via C1 que a rede registrada sumiu.
+        local inventory_rc=0
+        inventory_read "${project_name}" || inventory_rc=$?
+        if [[ ${inventory_rc} -eq 0 && -n "${INV_NETWORK:-}" ]]; then
+            local reserved_state
+            if ! reserved_state="$(docker_object_state network "${INV_NETWORK}")"; then
+                teardown_incomplete=true
+                msg_warn "Nao consegui consultar a rede registrada ${INV_NETWORK}; a reserva foi preservada."
+            elif [[ "${reserved_state}" == "absent" ]]; then
+                _clear_all_inventory_network "${project_name}" || {
+                    teardown_incomplete=true
+                    msg_warn "A rede registrada ${INV_NETWORK} ja nao existe, mas falhou a limpeza da reserva no inventario."
+                }
+            else
+                teardown_incomplete=true
+                msg_warn "A rede registrada ${INV_NETWORK} ainda existe; a reserva foi preservada e o teardown precisa ser concluido manualmente."
+            fi
+        elif [[ ${inventory_rc} -eq 0 ]]; then
+            _clear_all_inventory_network "${project_name}" || {
+                teardown_incomplete=true
+                msg_warn "Falhou a limpeza da reserva no inventario; corrija o registro antes de destruir a instancia."
+            }
+        elif [[ ${inventory_rc} -eq 1 ]]; then
+            local inventory_file
+            if ! inventory_file="$(inventory_file_for "${project_name}")"; then
+                teardown_incomplete=true
+                msg_warn "Nao foi possivel determinar o registro de inventario; corrija antes de destruir."
+            elif [[ -e "${inventory_file}" || -L "${inventory_file}" ]]; then
+                teardown_incomplete=true
+                msg_warn "O registro de inventario existe mas nao e arquivo regular legivel: ${inventory_file}; corrija antes de destruir."
+            fi
+        else
             teardown_incomplete=true
-            msg_warn "Falhou a limpeza da reserva no inventario; corrija o registro antes de destruir a instancia."
+            msg_warn "Nao foi possivel ler a reserva no inventario; ela foi preservada."
         fi
     fi
 
@@ -97,7 +133,10 @@ cmd_clear-all() {
 
     # Etapa 5/6: Arquivos do sistema (cron, logrotate)
     msg_step "ETAPA 5/6" "Removendo arquivos do sistema..."
-    cron_remove
+    if ! cron_remove; then
+        teardown_incomplete=true
+        msg_warn "Falha ao remover cron jobs; o teardown precisa ser concluido manualmente."
+    fi
 
     # Logrotate
     local logrotate_file="${LOGROTATE_DIR}/rotate-apache-logs-${project_name}"

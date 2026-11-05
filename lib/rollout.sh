@@ -520,9 +520,12 @@ _rollout_health_wait() {
 
     local resolved_mode="${mode}"
     if [[ "${resolved_mode}" == "auto" ]]; then
-        local has_health
-        has_health="$(docker inspect -f '{{if .State.Health}}yes{{end}}' "${container}" 2>/dev/null)" || true
-        if [[ "${has_health}" == "yes" ]]; then
+        local has_health inspect_rc
+        has_health="$(docker inspect -f '{{if .State.Health}}yes{{end}}' "${container}" 2>/dev/null)" || inspect_rc=$?
+        if [[ "${inspect_rc:-0}" -ne 0 ]]; then
+            log_error "Nao consegui consultar o container ${container} para decidir o healthcheck."
+            return 1
+        elif [[ "${has_health}" == "yes" ]]; then
             resolved_mode="docker"
         else
             resolved_mode="http"
@@ -536,15 +539,23 @@ _rollout_health_wait() {
 
         case "${resolved_mode}" in
             docker)
-                local status
-                status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${container}" 2>/dev/null)" || true
+                local status inspect_rc
+                status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${container}" 2>/dev/null)" || inspect_rc=$?
+                if [[ "${inspect_rc:-0}" -ne 0 ]]; then
+                    log_error "Nao consegui consultar o container ${container} durante o healthcheck."
+                    return 1
+                fi
                 [[ "${status}" == "healthy" ]] && return 0
 
                 # Container morto/removido nao vai ficar saudavel esperando o
                 # timeout inteiro — falha rapido com diagnostico claro em vez
                 # de so acusar timeout genérico ao final.
-                local container_state
-                container_state="$(docker inspect -f '{{.State.Status}}' "${container}" 2>/dev/null)" || true
+                local container_state state_rc
+                container_state="$(docker inspect -f '{{.State.Status}}' "${container}" 2>/dev/null)" || state_rc=$?
+                if [[ "${state_rc:-0}" -ne 0 ]]; then
+                    log_error "Nao consegui consultar o estado do container ${container} durante o healthcheck."
+                    return 1
+                fi
                 case "${container_state}" in
                     exited|dead|removing|"")
                         log_error "Container ${container} esta em estado '${container_state:-inexistente}' — abortando healthcheck (modo docker) sem aguardar o timeout."

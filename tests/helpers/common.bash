@@ -429,6 +429,18 @@ if [[ "$1" == "exec" ]]; then
     exit 0
 fi
 
+if [[ "$1" == "ps" ]]; then
+    # docker_object_state exige `ps -a`: so esse argv enumera parados.
+    for arg in "$@"; do
+        if [[ "${arg}" == "-a" ]]; then
+            [[ -e "${dir}/proxy_exists" ]] && echo "nginx-proxy"
+            cut -d'|' -f1 "${dir}/containers"
+            exit 0
+        fi
+    done
+    exit 0
+fi
+
 if [[ "$1" == "network" ]]; then
     sub="$2"
     shift 2

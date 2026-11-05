@@ -5,39 +5,30 @@
 # Versao do cctl
 CCTL_VERSION="0.1.0"
 
-# core_priv_run — executa rm/cp/install/mkdir/cat/mv com sudo somente quando necessario.
+# core_priv_run — executa rm/cp/install/mkdir/cat/test/ls/mv com sudo somente
+# quando necessario.
 #
-# Contrato de argumentos: core_priv_run <op> [flags/args...] <target>
-#   - <op> e sempre o primeiro argumento: rm, cp, install, mkdir, cat ou mv.
-#   - o TARGET/DESTINO e sempre o ULTIMO argumento da chamada (padrao de
-#     cp/install/mkdir/rm — o caminho que sera efetivamente criado/alterado).
-#   - para cp/install, a ORIGEM e o ultimo argumento nao-flag antes do
-#     target (heuristica: percorre os argumentos entre a operacao e o
-#     target, ignorando os que comecam com "-").
+# Contrato de argumentos: core_priv_run <op> [flags/args...] <target>.
+# <op> e o primeiro argumento; TARGET/DESTINO e o ultimo. Para cp/install,
+# a origem e o ultimo argumento nao-flag anterior ao destino.
 #
-# Criterio de gravabilidade/legibilidade por operacao:
-#   rm       : a permissao de remover vem do diretorio-pai, nao do arquivo
-#              em si — testa sempre "dirname $target".
-#   cp/install: verifica LEITURA da origem ("-r \"$src\"" — uma origem
-#              ilegivel, ex. arquivo 0600 de root, exige sudo mesmo com
-#              destino gravavel) E ESCRITA do destino (o proprio alvo se
-#              ja existir, senao o diretorio-pai onde sera criado).
-#   mkdir    : sobe pelos ancestrais ate achar o primeiro diretorio
-#              existente e testa gravabilidade dele.
-#   cat      : verifica apenas LEITURA do target (unico argumento) — usado
-#              para ler arquivos restritos (ex. chave privada 0600 de root)
-#              sem copiar/mover nada.
-#   mv       : rename atomico (lib/inventory.sh) — a origem e sempre um
-#              temp-file de propriedade do usuario atual (criado por quem
-#              chama core_priv_run), entao so o diretorio do DESTINO
-#              importa: igual a "rm", testa a gravabilidade de
-#              "dirname $target" (rename(2) exige escrita no diretorio, nao
-#              no arquivo que sera substituido).
+# Criterio por operacao: rm/mv testam escrita no pai; cp/install exigem leitura
+# da origem e escrita no destino; mkdir sobe ate o ancestral existente; cat le
+# o alvo; ls exige leitura+travessia do diretorio. `test -f|-d` executa o
+# predicado real; se precisar sudo, primeiro prova sua operabilidade e depois
+# executa somente o mesmo test, sem abrir shell generico.
 #
-# Se alguma checagem indicar necessidade de privilegio, tenta `sudo -n`
-# quando stdin nao e um terminal (ambiente nao-interativo); se falhar,
-# reporta erro claro em vez de travar esperando senha. Em terminal
-# interativo, usa `sudo` normal (pode pedir senha).
+# O protocolo de `test` separa resultado logico de operacional: 0 = presente,
+# 1 = ausente confirmado e 2 = sudo/test nao executou a consulta. Sem TTY usa
+# sudo -n; com TTY usa sudo normal. No ramo direto, um symlink cujo alvo pode
+# estar protegido escala para sudo. Risco residual aceito: sudoers restrito por
+# comando que permita true e negue test pode parecer ausencia; isto fica fora
+# do contrato pela D1, que exige usuario com sudo completo. Erro de `ls` pode
+# ser do diretorio, filesystem ou sudo, portanto nao e atribuido so ao sudo.
+_core_stdin_is_tty() {
+    [[ -t 0 ]]
+}
+
 core_priv_run() {
     local op="${1:-}"
     local target="${*: -1}"
@@ -79,6 +70,24 @@ core_priv_run() {
         cat)
             [[ -r "${target}" ]] || need_sudo=true
             ;;
+        test)
+            # Sem travessia no pai, ou symlink que o teste direto nao conseguiu
+            # resolver, a ausencia so pode ser confirmada pelo test privilegiado.
+            if [[ ! -x "$(dirname -- "${target}")" ]]; then
+                need_sudo=true
+            elif "$@"; then
+                return 0
+            else
+                local test_rc=$?
+                [[ ${test_rc} -eq 1 && -L "${target}" ]] && need_sudo=true || return "${test_rc}"
+            fi
+            ;;
+        ls)
+            # Descobertas estritas precisam enumerar o diretorio de verdade.
+            # Leitura e travessia sao ambas necessarias; sem uma delas, escala
+            # para sudo em vez de converter o erro em uma lista vazia.
+            [[ -r "${target}" && -x "${target}" ]] || need_sudo=true
+            ;;
         mv)
             local mv_dir
             mv_dir="$(dirname -- "${target}")"
@@ -95,11 +104,31 @@ core_priv_run() {
         return $?
     fi
 
-    if [[ ! -t 0 ]]; then
+    if [[ "${op}" == "test" ]]; then
+        local sudo_rc
+        if ! _core_stdin_is_tty; then
+            sudo -n true || {
+                log_error "Nao foi possivel operar sudo para consultar ${target}. Confira sudo, permissao e filesystem."
+                return 2
+            }
+            sudo -n "$@"
+        else
+            sudo true || {
+                log_error "Nao foi possivel operar sudo para consultar ${target}. Confira sudo, permissao e filesystem."
+                return 2
+            }
+            sudo "$@"
+        fi
+        sudo_rc=$?
+        [[ ${sudo_rc} -le 1 ]] && return "${sudo_rc}"
+        return 2
+    fi
+
+    if ! _core_stdin_is_tty; then
         if sudo -n "$@"; then
             return 0
         fi
-        log_error "Privilegio de root necessario para '${op} ... ${target}' e sudo nao-interativo (sudo -n) falhou. Configure sudo NOPASSWD para este usuario ou execute em uma sessao interativa."
+        log_error "Privilegio de root necessario para '${op} ... ${target}'; a consulta pode ter falhado por sudo, permissao ou filesystem."
         return 1
     fi
 

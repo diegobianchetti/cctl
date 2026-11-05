@@ -110,27 +110,62 @@ env_check_required_vars() {
     return 0
 }
 
-# Substitui placeholder de senha no .env (ex: _POSTGRES_PASSWORD_ -> valor real)
+# Grava uma chave do .env literalmente. O arquivo deve ser regular e local:
+# o mktemp cria o substituto em modo 0600, pertencente ao usuario corrente.
+# Chaves duplicadas sao todas atualizadas; symlinks sao recusados.
 env_set_var() {
-    local key="$1"
-    local value="$2"
-    local env_file
+    local key="$1" value="$2" env_file tmp line content found=false
     env_file=$(_env_file_path)
 
+    if [[ -L "${env_file}" ]]; then
+        log_error "Arquivo .env nao pode ser symlink"
+        return 1
+    fi
     if [[ ! -f "${env_file}" ]]; then
         log_error "Arquivo .env nao encontrado"
         return 1
     fi
-
-    if grep -q "^${key}=" "${env_file}"; then
-        # Atualiza valor existente
-        sed -i "s|^${key}=.*|${key}=${value}|" "${env_file}"
-    else
-        # Adiciona nova variavel
-        echo "${key}=${value}" >> "${env_file}"
+    if [[ ! "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || [[ "${value}" == *$'\n'* ]]; then
+        log_error "Chave ou valor invalido para .env"
+        return 1
     fi
 
-    # Exporta no ambiente atual
+    tmp="$(mktemp "$(dirname "${env_file}")/.env.cctl.XXXXXX")" || {
+        log_error "Falha ao preparar escrita do .env"
+        return 1
+    }
+    # Leitura real e integral antes de autorizar o rename: -r isolado nao
+    # detecta erro de abertura/leitura quando o chamador usa if ou ||. A
+    # captura normaliza newlines finais e linhas vazias finais; efeito cosmetico
+    # aceito, sem alterar o valor das configuracoes.
+    if ! content="$(cat -- "${env_file}")"; then
+        rm -f "${tmp}"
+        log_error "Falha ao ler .env original"
+        return 1
+    fi
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        if [[ "${line}" == "${key}="* ]]; then
+            printf '%s=%s\n' "${key}" "${value}" >> "${tmp}" || { rm -f "${tmp}"; log_error "Falha ao escrever .env"; return 1; }
+            found=true
+        else
+            printf '%s\n' "${line}" >> "${tmp}" || { rm -f "${tmp}"; log_error "Falha ao escrever .env"; return 1; }
+        fi
+    done <<< "${content}"
+    [[ "${found}" == true ]] || printf '%s=%s\n' "${key}" "${value}" >> "${tmp}" || { rm -f "${tmp}"; log_error "Falha ao escrever .env"; return 1; }
+    if ! mv -f "${tmp}" "${env_file}"; then
+        rm -f "${tmp}"
+        log_error "Falha ao gravar .env"
+        return 1
+    fi
+    local verified=false
+    while IFS= read -r line; do
+        [[ "${line}" == "${key}=${value}" ]] && { verified=true; break; }
+    done < "${env_file}"
+    if [[ "${verified}" != true ]]; then
+        rm -f "${tmp}"
+        log_error "Falha ao conferir gravacao de ${key} no .env"
+        return 1
+    fi
     export "${key}=${value}"
     log_debug "Variavel setada: ${key}"
 }

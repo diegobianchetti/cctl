@@ -179,7 +179,7 @@ EOF
 EOF
 
     run cron_remove
-    assert_success
+    assert_failure
     # O arquivo continua no disco porque o rm mockado falhou de proposito.
     [[ -f "${CRON_DIR}/exec-cron-moodle-moodle" ]]
     # Nao pode reportar "1 cron job(s) removido(s)" — nada foi removido.
@@ -223,4 +223,282 @@ EOF
     # projeto cujo nome termina igual (por isso o aviso existe)
     [[ "${so}" == *"${CRON_DIR}/exec-cron-moodle-moodle"* ]]
     [[ "${so}" == *"${CRON_DIR}/exec-cron-moodle-prod-moodle"* ]]
+}
+
+@test "C6 cron_remove: falha de descoberta privilegiada preserva arquivos e nao chama rm" {
+    local target="${CRON_DIR}/exec-cron-moodle-moodle"
+    : > "${target}"
+    core_priv_run() {
+        [[ "$1" == "test" ]] && return 2
+        return 99
+    }
+    mock_cmd rm 'echo "rm $*" >> "'"${WORKDIR}"'/rm.calls"; exit 0'
+
+    run cron_remove
+    assert_failure
+    assert_output --partial "Nao foi possivel descobrir cron jobs"
+    [[ -f "${target}" ]]
+    [[ ! -e "${WORKDIR}/rm.calls" ]]
+}
+
+@test "C6 cron_remove: ./cron sem acesso nao vira fonte local vazia nem chama rm" {
+    local target="${CRON_DIR}/exec-cron-moodle-moodle"
+    : > "${target}"
+    core_priv_run() {
+        case "$1" in
+            test) [[ "$2" == "-d" && "$3" == "./cron" ]] && return 0 ;;
+            ls) [[ "$3" == "./cron" ]] && { echo "listagem negada" >&2; return 2; } ;;
+        esac
+        return 99
+    }
+    mock_cmd rm 'echo "rm $*" >> "'"${WORKDIR}"'/rm.calls"; exit 0'
+
+    run cron_remove
+    assert_failure
+    assert_output --partial "Nao foi possivel descobrir cron jobs"
+    [[ -f "${target}" ]]
+    [[ ! -e "${WORKDIR}/rm.calls" ]]
+}
+
+@test "C6 cron_remove: fallback CRON_DIR sem acesso nao vira vazio nem chama rm" {
+    rm -rf ./cron
+    local target="${CRON_DIR}/exec-cron-moodle-moodle"
+    : > "${target}"
+    core_priv_run() {
+        case "$1:$2:$3" in
+            test:-d:./cron) return 1 ;;
+            test:-d:"${CRON_DIR}") return 0 ;;
+            ls:-1:--) echo "listagem negada" >&2; return 2 ;;
+        esac
+        return 99
+    }
+    mock_cmd rm 'echo "rm $*" >> "'"${WORKDIR}"'/rm.calls"; exit 0'
+
+    run cron_remove
+    assert_failure
+    assert_output --partial "Nao foi possivel descobrir cron jobs"
+    [[ -f "${target}" ]]
+    [[ ! -e "${WORKDIR}/rm.calls" ]]
+}
+
+@test "C6 cron_remove: listagem parcial com erro nao remove o item listado" {
+    local target="${CRON_DIR}/exec-cron-moodle-moodle"
+    : > "${target}"
+    core_priv_run() {
+        case "$1" in
+            test) return 0 ;;
+            ls) printf 'exec-cron-moodle.cron\n'; echo "erro apos parcial" >&2; return 2 ;;
+        esac
+        return 99
+    }
+    mock_cmd rm 'echo "rm $*" >> "'"${WORKDIR}"'/rm.calls"; exit 0'
+
+    run cron_remove
+    assert_failure
+    assert_output --partial "Nao foi possivel descobrir cron jobs"
+    [[ -f "${target}" ]]
+    [[ ! -e "${WORKDIR}/rm.calls" ]]
+}
+
+# O alvo fica atras de um pai sem travessia, forcando o wrapper real a usar
+# sudo mockado. O mock restaura a travessia somente para executar o test real
+# sobre o fixture; nenhum sudo real e chamado.
+@test "B4 core_priv_run test: nonTTY falso logico devolve 1 apos sudo test" {
+    local blocked="${WORKDIR}/sem-travessia" target="${WORKDIR}/sem-travessia/ausente"
+    mkdir -p "${blocked}"
+    chmod 000 "${blocked}"
+    mock_cmd sudo 'printf "sudo" >> "'"${WORKDIR}"'/sudo.log"; printf " %s" "$@" >> "'"${WORKDIR}"'/sudo.log"; printf "\n" >> "'"${WORKDIR}"'/sudo.log"; [[ "$1" == "-n" ]] && shift; [[ "$1" == "true" ]] && exit 0; chmod 700 "'"${blocked}"'"; "$@"; rc=$?; chmod 000 "'"${blocked}"'"; exit ${rc}'
+
+    local rc
+    if core_priv_run test -f "${target}"; then rc=0; else rc=$?; fi
+    chmod 700 "${blocked}"
+
+    [[ ${rc} -eq 1 ]]
+    grep -qxF "sudo -n true" "${WORKDIR}/sudo.log"
+    grep -qxF "sudo -n test -f ${target}" "${WORKDIR}/sudo.log"
+}
+
+@test "B4 core_priv_run test: nonTTY verdadeiro logico devolve 0 apos sudo test" {
+    local blocked="${WORKDIR}/sem-travessia" target="${WORKDIR}/sem-travessia/presente"
+    mkdir -p "${blocked}"
+    : > "${target}"
+    chmod 000 "${blocked}"
+    mock_cmd sudo 'printf "sudo" >> "'"${WORKDIR}"'/sudo.log"; printf " %s" "$@" >> "'"${WORKDIR}"'/sudo.log"; printf "\n" >> "'"${WORKDIR}"'/sudo.log"; [[ "$1" == "-n" ]] && shift; [[ "$1" == "true" ]] && exit 0; chmod 700 "'"${blocked}"'"; "$@"; rc=$?; chmod 000 "'"${blocked}"'"; exit ${rc}'
+
+    core_priv_run test -f "${target}"
+    local rc=$?
+    chmod 700 "${blocked}"
+
+    [[ ${rc} -eq 0 ]]
+    grep -qxF "sudo -n true" "${WORKDIR}/sudo.log"
+    grep -qxF "sudo -n test -f ${target}" "${WORKDIR}/sudo.log"
+}
+
+@test "B4 core_priv_run test: nonTTY falha operacional devolve 2" {
+    local blocked="${WORKDIR}/sem-travessia" target="${WORKDIR}/sem-travessia/ausente"
+    mkdir -p "${blocked}"
+    chmod 000 "${blocked}"
+    mock_cmd sudo 'printf "sudo" >> "'"${WORKDIR}"'/sudo.log"; printf " %s" "$@" >> "'"${WORKDIR}"'/sudo.log"; printf "\n" >> "'"${WORKDIR}"'/sudo.log"; exit 1'
+
+    local rc
+    if core_priv_run test -d "${target}"; then rc=0; else rc=$?; fi
+    chmod 700 "${blocked}"
+
+    [[ ${rc} -eq 2 ]]
+    grep -qxF "sudo -n true" "${WORKDIR}/sudo.log"
+    ! grep -q ' test ' "${WORKDIR}/sudo.log"
+}
+
+@test "B4 core_priv_run test: TTY falso logico devolve 1 apos sudo test" {
+    local blocked="${WORKDIR}/sem-travessia" target="${WORKDIR}/sem-travessia/ausente"
+    mkdir -p "${blocked}"
+    chmod 000 "${blocked}"
+    _core_stdin_is_tty() { return 0; }
+    mock_cmd sudo 'printf "sudo" >> "'"${WORKDIR}"'/sudo.log"; printf " %s" "$@" >> "'"${WORKDIR}"'/sudo.log"; printf "\n" >> "'"${WORKDIR}"'/sudo.log"; [[ "$1" == "true" ]] && exit 0; chmod 700 "'"${blocked}"'"; "$@"; rc=$?; chmod 000 "'"${blocked}"'"; exit ${rc}'
+
+    local rc
+    if core_priv_run test -d "${target}"; then rc=0; else rc=$?; fi
+    chmod 700 "${blocked}"
+
+    [[ ${rc} -eq 1 ]]
+    grep -qxF "sudo true" "${WORKDIR}/sudo.log"
+    grep -qxF "sudo test -d ${target}" "${WORKDIR}/sudo.log"
+}
+
+@test "B4 core_priv_run test: TTY verdadeiro logico devolve 0 apos sudo test" {
+    local blocked="${WORKDIR}/sem-travessia" target="${WORKDIR}/sem-travessia/presente"
+    mkdir -p "${blocked}"
+    mkdir "${target}"
+    chmod 000 "${blocked}"
+    _core_stdin_is_tty() { return 0; }
+    mock_cmd sudo 'printf "sudo" >> "'"${WORKDIR}"'/sudo.log"; printf " %s" "$@" >> "'"${WORKDIR}"'/sudo.log"; printf "\n" >> "'"${WORKDIR}"'/sudo.log"; [[ "$1" == "true" ]] && exit 0; chmod 700 "'"${blocked}"'"; "$@"; rc=$?; chmod 000 "'"${blocked}"'"; exit ${rc}'
+
+    core_priv_run test -d "${target}"
+    local rc=$?
+    chmod 700 "${blocked}"
+
+    [[ ${rc} -eq 0 ]]
+    grep -qxF "sudo true" "${WORKDIR}/sudo.log"
+    grep -qxF "sudo test -d ${target}" "${WORKDIR}/sudo.log"
+}
+
+@test "B4 core_priv_run test: TTY falha operacional devolve 2" {
+    local blocked="${WORKDIR}/sem-travessia" target="${WORKDIR}/sem-travessia/ausente"
+    mkdir -p "${blocked}"
+    chmod 000 "${blocked}"
+    _core_stdin_is_tty() { return 0; }
+    mock_cmd sudo 'printf "sudo" >> "'"${WORKDIR}"'/sudo.log"; printf " %s" "$@" >> "'"${WORKDIR}"'/sudo.log"; printf "\n" >> "'"${WORKDIR}"'/sudo.log"; [[ "$1" == "true" ]] && exit 0; exit 2'
+
+    local rc
+    if core_priv_run test -f "${target}"; then rc=0; else rc=$?; fi
+    chmod 700 "${blocked}"
+
+    [[ ${rc} -eq 2 ]]
+    grep -qxF "sudo true" "${WORKDIR}/sudo.log"
+    grep -qxF "sudo test -f ${target}" "${WORKDIR}/sudo.log"
+}
+
+@test "B4 cron_remove: sudo -n true falho preserva familia sem test nem rm" {
+    local target="${CRON_DIR}/exec-cron-moodle-moodle" rc
+    : > "${target}"
+    chmod 000 "${CRON_DIR}"
+    mock_cmd sudo 'printf "sudo" >> "'"${WORKDIR}"'/sudo.log"; printf " %s" "$@" >> "'"${WORKDIR}"'/sudo.log"; printf "\n" >> "'"${WORKDIR}"'/sudo.log"; exit 1'
+    mock_cmd rm 'printf "rm %s\n" "$*" >> "'"${WORKDIR}"'/rm.calls"; exec /bin/rm "$@"'
+
+    if cron_remove; then rc=0; else rc=$?; fi
+    chmod 700 "${CRON_DIR}"
+
+    [[ ${rc} -ne 0 ]]
+    [[ -f "${target}" ]]
+    grep -qxF "sudo -n true" "${WORKDIR}/sudo.log"
+    ! grep -q ' test ' "${WORKDIR}/sudo.log"
+    [[ ! -e "${WORKDIR}/rm.calls" ]]
+}
+
+@test "N1 cron symlink com alvo protegido escala sudo e cron_remove chama rm" {
+    local protected="${WORKDIR}/protegido" target
+    target="${protected}/cron-real"
+    local system_cron="${CRON_DIR}/exec-cron-moodle-moodle"
+    mkdir -p "${protected}"
+    : > "${target}"
+    ln -s "${target}" "${system_cron}"
+    chmod 000 "${protected}"
+    mock_cmd sudo 'printf "sudo" >> "'"${WORKDIR}"'/sudo.log"; printf " %s" "$@" >> "'"${WORKDIR}"'/sudo.log"; printf "\n" >> "'"${WORKDIR}"'/sudo.log"; [[ "$1" == "-n" ]] && shift; [[ "$1" == "true" ]] && exit 0; chmod 700 "'"${protected}"'"; "$@"; rc=$?; chmod 000 "'"${protected}"'"; exit ${rc}'
+    mock_cmd rm 'printf "rm %s\n" "$*" >> "'"${WORKDIR}"'/rm.calls"; exec /bin/rm "$@"'
+
+    run cron_remove
+    local rc=${status}
+    chmod 700 "${protected}"
+
+    [[ ${rc} -eq 0 ]]
+    [[ ! -L "${system_cron}" ]]
+    grep -qxF "sudo -n true" "${WORKDIR}/sudo.log"
+    grep -qxF "sudo -n test -f ${system_cron}" "${WORKDIR}/sudo.log"
+    grep -qF -- "-f ${system_cron}" "${WORKDIR}/rm.calls"
+}
+
+@test "N1 cron symlink valido e descoberto pelo protocolo sudo em TTY" {
+    local locked_dir="${WORKDIR}/protegido-tty" target system_cron output
+    target="${locked_dir}/cron-real"
+    system_cron="${CRON_DIR}/exec-cron-moodle-moodle"
+    mkdir -p "${locked_dir}"
+    : > "${target}"
+    ln -s "${target}" "${system_cron}"
+    chmod 000 "${locked_dir}"
+    _core_stdin_is_tty() { return 0; }
+    mock_cmd sudo 'printf "sudo" >> "'"${WORKDIR}"'/sudo.log"; printf " %s" "$@" >> "'"${WORKDIR}"'/sudo.log"; printf "\n" >> "'"${WORKDIR}"'/sudo.log"; [[ "$1" == "true" ]] && exit 0; chmod 700 "'"${locked_dir}"'"; "$@"; rc=$?; chmod 000 "'"${locked_dir}"'"; exit ${rc}'
+    mock_cmd rm 'printf "rm %s\n" "$*" >> "'"${WORKDIR}"'/rm.calls"; exec /bin/rm "$@"'
+
+    output="$(_cron_system_files "moodle")"
+    local rc=$?
+    [[ ${rc} -eq 0 ]]
+    [[ "${output}" == "${system_cron}" ]]
+
+    run cron_remove
+    rc=${status}
+    chmod 700 "${locked_dir}"
+
+    [[ ${rc} -eq 0 ]]
+    [[ ! -L "${system_cron}" ]]
+    grep -qxF "sudo true" "${WORKDIR}/sudo.log"
+    grep -qxF "sudo test -f ${system_cron}" "${WORKDIR}/sudo.log"
+    grep -qF -- "-f ${system_cron}" "${WORKDIR}/rm.calls"
+}
+
+@test "N2 CRON_DIR ausente e fonte presente e descoberta vazia nos modos sudo" {
+    rm -rf "${CRON_DIR}"
+    mock_cmd sudo 'printf "sudo" >> "'"${WORKDIR}"'/sudo.log"; printf " %s" "$@" >> "'"${WORKDIR}"'/sudo.log"; printf "\n" >> "'"${WORKDIR}"'/sudo.log"; [[ "$1" == "-n" ]] && shift; [[ "$1" == "true" ]] && exit 0; "$@"'
+    mock_cmd rm 'echo "rm $*" >> "'"${WORKDIR}"'/rm.calls"; exit 99'
+    local mode output rc
+    for mode in nonTTY TTY; do
+        [[ "${mode}" == TTY ]] && _core_stdin_is_tty() { return 0; } || _core_stdin_is_tty() { return 1; }
+        output="$(_cron_system_files "moodle")"
+        rc=$?
+        [[ ${rc} -eq 0 && -z "${output}" ]] || return 1
+        cron_remove || return 1
+    done
+    [[ ! -e "${WORKDIR}/rm.calls" ]]
+}
+
+@test "B4 core_priv_run test: sudo test rc maior que um devolve 2" {
+    local blocked="${WORKDIR}/sem-travessia" target="${WORKDIR}/sem-travessia/ausente"
+    mkdir -p "${blocked}"
+    chmod 000 "${blocked}"
+    mock_cmd sudo 'printf "sudo" >> "'"${WORKDIR}"'/sudo.log"; printf " %s" "$@" >> "'"${WORKDIR}"'/sudo.log"; printf "\n" >> "'"${WORKDIR}"'/sudo.log"; [[ "$1" == "-n" ]] && shift; [[ "$1" == "true" ]] && exit 0; exit 2'
+
+    local rc
+    if core_priv_run test -f "${target}"; then rc=0; else rc=$?; fi
+    chmod 700 "${blocked}"
+
+    [[ ${rc} -eq 2 ]]
+    grep -qxF "sudo -n test -f ${target}" "${WORKDIR}/sudo.log"
+}
+
+@test "cron_list: falha de descoberta nao anuncia nenhum cron job" {
+    core_priv_run() { return 2; }
+
+    run cron_list
+    assert_failure
+    assert_output --partial "Nao foi possivel descobrir cron jobs"
+    refute_output --partial "Nenhum cron job encontrado"
 }
