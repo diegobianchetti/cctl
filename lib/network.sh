@@ -139,18 +139,18 @@ network_validate_config() {
 # Faixas das redes Docker que ja existem (de qualquer tamanho).
 # Saida: uma linha por faixa, "CIDR<TAB>origem". So IPv4.
 network_docker_ranges() {
-    local line name subnet
+    local ids output line name subnet
+    ids="$(docker network ls -q)" || return 1
+    [[ -n "${ids}" ]] || return 0
+    output="$(xargs -r docker network inspect --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' <<< "${ids}")" || return 1
     while IFS= read -r line; do
         [[ -n "${line}" ]] || continue
-        # cada linha: "<nome-da-rede> <subnet> <subnet> ..."
         read -r name line <<< "${line}"
         for subnet in ${line}; do
             network_cidr_valid "${subnet}" || continue
             printf '%s\trede Docker %s\n' "${subnet}" "${name}"
         done
-    done < <(docker network ls -q 2>/dev/null \
-        | xargs -r docker network inspect \
-            --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null)
+    done <<< "${output}"
 }
 
 # Rotas IPv4 do host que NAO sao de bridge Docker (LAN, VPN, libvirt...).
@@ -165,13 +165,9 @@ network_docker_ranges() {
 #     (ex.: br-lan) e rede do operador e CONTA como rota do host.
 # Saida: "CIDR<TAB>origem".
 network_host_routes() {
-    local dest dev
-    while read -r dest dev; do
-        [[ "${dest}" =~ ^[0-9] ]] || continue
-        [[ "${dest}" == */* ]] || dest="${dest}/32"
-        network_cidr_valid "${dest}" || continue
-        printf '%s\trota do host (dev %s)\n' "${dest}" "${dev:-?}"
-    done < <(ip -4 route show table all 2>/dev/null | awk '
+    local routes parsed dest dev
+    routes="$(ip -4 route show table all)" || return 1
+    parsed="$(awk '
         $1 == "default" { next }
         {
             dev = ""
@@ -179,7 +175,13 @@ network_host_routes() {
             if (dev == "docker0") next
             if (length(dev) == 15 && dev ~ /^br-[0-9a-f]+$/) next
             print $1, dev
-        }')
+        }' <<< "${routes}")" || return 1
+    while read -r dest dev; do
+        [[ "${dest}" =~ ^[0-9] ]] || continue
+        [[ "${dest}" == */* ]] || dest="${dest}/32"
+        network_cidr_valid "${dest}" || continue
+        printf '%s\trota do host (dev %s)\n' "${dest}" "${dev:-?}"
+    done <<< "${parsed}"
 }
 
 # Faixas que o proprio Docker usa para criar redes sozinho (as "automaticas").
@@ -237,25 +239,107 @@ network_inventory_ranges() {
     done < <(inventory_network_list)
 }
 
+# Separa as consultas do inventario para os testes simularem um diretorio sem
+# acesso mesmo sob root (onde chmod nao e discriminante).
+_network_inventory_dir_accessible() {
+    [[ -d "$1" && -r "$1" && -x "$1" ]]
+}
+
+# Lista SOMENTE nomes de arquivos TSV e deixa o rc do find chegar ao chamador.
+# A captura antes do processamento impede que uma lista parcial seja tratada
+# como inventario vazio.
+_network_inventory_tsv_listing() {
+    find -H "$1" -maxdepth 1 \( -type f -o -type l \) -name '*.tsv' -printf '%f\n'
+}
+
+# Retorna 0 somente quando um ancestral alcançavel confirma que inventory_dir
+# ainda nao existe. Um -e falso isolado tambem ocorre sob EACCES em ancestral.
+_network_inventory_dir_absent() {
+    local path="$1"
+    while [[ "${path}" == */ && "${path}" != / ]]; do
+        path="${path%/}"
+    done
+    [[ -e "${path}" ]] && return 1
+
+    # Componentes inexistentes nao podem ser testados para travessia. Sobe ate
+    # o ancestral mais profundo que exista; so ele precisa ser diretorio e x.
+    while [[ ! -e "${path}" ]]; do
+        # Link sem alvo acessivel nao comprova ausencia no pai lexical.
+        [[ -L "${path}" ]] && return 2
+        local parent
+        parent="$(dirname -- "${path}")"
+        [[ "${parent}" != "${path}" ]] || return 2
+        path="${parent}"
+    done
+    [[ -d "${path}" && -x "${path}" ]] || return 2
+    return 0
+}
+
+# Inventario estrito para alocacao: diretorio ausente e vazio; diretorio que
+# existe mas nao e acessivel, nao e diretorio, listagem falha ou registro
+# ilegivel/corrompido interrompe para nao entregar uma faixa ja reservada.
+network_inventory_ranges_strict() {
+    local skip="${1:-}" inventory_dir="${CCTL_INVENTORY_DIR}" listing name file project_name absent_rc
+
+    _network_inventory_dir_absent "${inventory_dir}" || absent_rc=$?
+    if [[ "${absent_rc:-0}" -eq 0 ]]; then
+        return 0
+    elif [[ "${absent_rc:-0}" -eq 2 ]]; then
+        log_error "Nao foi possivel acessar um ancestral do diretorio de inventario ${inventory_dir}. Corrija as permissoes antes de alocar uma subnet."
+        return 1
+    fi
+    if ! _network_inventory_dir_accessible "${inventory_dir}"; then
+        log_error "Nao foi possivel acessar o diretorio de inventario ${inventory_dir}. Corrija as permissoes antes de alocar uma subnet."
+        return 1
+    fi
+
+    listing="$(_network_inventory_tsv_listing "${inventory_dir}")" || {
+        log_error "Nao foi possivel listar o inventario em ${inventory_dir}; a alocacao foi abortada."
+        return 1
+    }
+
+    while IFS= read -r name; do
+        [[ -n "${name}" ]] || continue
+        file="${inventory_dir}/${name}"
+        [[ -f "${file}" && -r "${file}" ]] || {
+            log_error "Registro de inventario ilegivel: ${file}"
+            return 1
+        }
+        project_name="${name%.tsv}"
+        inventory_read "${project_name}" || {
+            log_error "Registro de inventario corrompido: ${file}"
+            return 1
+        }
+        [[ "${INV_PROJECT_NAME}" == "${skip}" || -z "${INV_SUBNET}" ]] && continue
+        network_cidr_valid "${INV_SUBNET}" || {
+            log_error "Registro de inventario corrompido (SUBNET invalida): ${file}"
+            return 1
+        }
+        printf '%s\treservada pelo projeto %s no inventario\n' "${INV_SUBNET}" "${INV_PROJECT_NAME}"
+    done <<< "${listing}"
+}
+
 # Tudo que uma nova subnet tem de evitar. Uso: network_used_ranges [projeto]
 network_used_ranges() {
-    local project="${1:-}"
-    network_docker_ranges
-    network_host_routes
-    network_inventory_ranges "${project}"
+    local project="${1:-}" docker_ranges host_routes inventory_ranges
+    docker_ranges="$(network_docker_ranges)" || return 1
+    host_routes="$(network_host_routes)" || return 1
+    inventory_ranges="$(network_inventory_ranges_strict "${project}")" || return 1
+    printf '%s\n%s\n%s\n' "${docker_ranges}" "${host_routes}" "${inventory_ranges}" | sed '/^$/d'
 }
 
 # Faixas que conflitam com <subnet>. Imprime "origem" (uma por linha); sem
 # saida = livre. Uso: network_find_conflicts <subnet> [projeto-a-ignorar]
 network_find_conflicts() {
     local subnet="$1" project="${2:-}"
-    local cidr origin
+    local cidr origin used_ranges
+    used_ranges="$(network_used_ranges "${project}")" || return 1
     while IFS=$'\t' read -r cidr origin; do
         [[ -n "${cidr}" ]] || continue
         if network_cidr_overlap "${subnet}" "${cidr}"; then
             printf '%s (%s)\n' "${origin}" "${cidr}"
         fi
-    done < <(network_used_ranges "${project}")
+    done <<< "${used_ranges}"
 }
 
 # Proxima subnet livre do range, andando em passos do tamanho de
@@ -276,13 +360,14 @@ network_allocate_subnet() {
     # Converte tudo que ja esta em uso para pares [inicio, fim] uma unica vez,
     # para o laco de candidatos so comparar inteiros.
     local -a u_first=() u_last=()
-    local cidr origin
+    local cidr origin used_ranges
+    used_ranges="$(network_used_ranges "${project}")" || { log_error "Nao consegui enumerar faixas em uso"; return 1; }
     while IFS=$'\t' read -r cidr origin; do
         [[ -n "${cidr}" ]] || continue
         _network_bounds "${cidr}" || continue
         u_first+=("${_NET_FIRST}")
         u_last+=("${_NET_LAST}")
-    done < <(network_used_ranges "${project}")
+    done <<< "${used_ranges}"
     for cidr in "$@"; do
         _network_bounds "${cidr}" || continue
         u_first+=("${_NET_FIRST}")
@@ -335,7 +420,10 @@ network_check_candidate() {
     fi
 
     local conflicts
-    conflicts=$(network_find_conflicts "${subnet}" "${project}")
+    if ! conflicts=$(network_find_conflicts "${subnet}" "${project}"); then
+        NETWORK_REJECT_REASON="falha operacional ao consultar faixas em uso."
+        return 2
+    fi
     if [[ -n "${conflicts}" ]]; then
         NETWORK_REJECT_REASON="'${subnet}' ja esta em uso: $(head -n1 <<< "${conflicts}")."
         return 1
@@ -352,9 +440,40 @@ network_name_for_project() {
     echo "${1}_net"
 }
 
-# Retorna 0 se a rede Docker existe.
+# Consulta um objeto Docker sem converter falha operacional em ausencia.
+# stdout: present/absent com rc 0; erro de consulta: rc 2 sem stdout.
+# Uso: docker_object_state <network|container|volume> <nome>
+docker_object_state() {
+    local type="$1" name="$2" output
+    case "${type}" in
+        network)
+            if output="$(docker network ls --format '{{.Name}}')"; then :; else return 2; fi
+            ;;
+        container)
+            if output="$(docker ps -a --format '{{.Names}}')"; then :; else return 2; fi
+            ;;
+        volume)
+            if output="$(docker volume ls --format '{{.Name}}')"; then :; else return 2; fi
+            ;;
+        *) log_error "Tipo de objeto Docker invalido: ${type}"; return 2 ;;
+    esac
+    local item
+    while IFS= read -r item; do
+        [[ "${item}" == "${name}" ]] && { printf 'present\n'; return 0; }
+    done <<< "${output}"
+    printf 'absent\n'
+    return 0
+}
+
+# Traduz o texto do helper para a semantica historica: 0 existe, 1 ausente,
+# 2 erro de consulta.
 network_exists() {
-    docker network inspect "$1" >/dev/null 2>&1
+    local state
+    if state="$(docker_object_state network "$1")"; then
+        [[ "${state}" == "present" ]] && return 0
+        [[ "${state}" == "absent" ]] && return 1
+    fi
+    return 2
 }
 
 # Subnet IPv4 de uma rede existente.
@@ -413,9 +532,14 @@ network_prompt_subnet() {
             return 0
         fi
         answer=$(network_cidr_normalize "${answer}")
-        if network_check_candidate "${answer}" "${project}"; then
+        local candidate_rc=0
+        network_check_candidate "${answer}" "${project}" || candidate_rc=$?
+        if [[ ${candidate_rc} -eq 0 ]]; then
             NETWORK_CHOSEN_SUBNET="${answer}"
             return 0
+        elif [[ ${candidate_rc} -eq 2 ]]; then
+            log_error "Falha operacional ao validar a faixa: ${NETWORK_REJECT_REASON}"
+            return 1
         fi
         msg_warn "Faixa recusada: ${NETWORK_REJECT_REASON}"
     done
@@ -445,7 +569,10 @@ network_provision_for_install() {
     local net subnet
     net=$(network_name_for_project "${project}")
 
-    if network_exists "${net}"; then
+    local network_state
+    network_exists "${net}" || network_state=$?
+    case "${network_state:-0}" in
+        0)
         local owner
         owner=$(network_label_of "${net}" "io.cctl.project") || owner=""
         if [[ "${owner}" != "${project}" ]]; then
@@ -458,11 +585,12 @@ network_provision_for_install() {
             return 1
         fi
         log_success "Rede ${net} ja existe (subnet ${subnet}) — reaproveitando"
-    else
+        ;;
+        1)
         subnet=$(network_allocate_subnet "${project}") || return 1
 
         if _network_is_interactive; then
-            network_prompt_subnet "${subnet}" "${project}"
+            network_prompt_subnet "${subnet}" "${project}" || return 1
             subnet="${NETWORK_CHOSEN_SUBNET}"
         else
             msg_info "Sem terminal: usando a subnet sugerida ${subnet}"
@@ -489,7 +617,12 @@ network_provision_for_install() {
             return 1
         done
         log_success "Rede ${net} criada (subnet ${subnet})"
-    fi
+        ;;
+        2)
+        log_error "Nao consegui consultar a rede Docker ${net}; nenhuma rede foi criada."
+        return 1
+        ;;
+    esac
 
     env_set_var "CCTL_PROJECT_NETWORK" "${net}" || return 1
     env_set_var "COMPOSE_PROJECT_SUBNET" "${subnet}" || return 1
@@ -533,9 +666,14 @@ network_ensure_for_up() {
         return 1
     fi
 
-    if ! network_exists "${net}"; then
+    local network_state
+    network_exists "${net}" || network_state=$?
+    if [[ "${network_state:-0}" -eq 1 ]]; then
         local conflicts
-        conflicts=$(network_find_conflicts "${subnet}" "${project}")
+        if ! conflicts=$(network_find_conflicts "${subnet}" "${project}"); then
+            log_error "Nao consegui enumerar conflitos para recriar a rede ${net}; a subida foi abortada."
+            return 1
+        fi
         if [[ -n "${conflicts}" ]]; then
             log_error "A rede ${net} nao existe mais e a faixa dela (${subnet}) foi tomada por:"
             sed 's/^/    - /' <<< "${conflicts}" >&2
@@ -554,7 +692,7 @@ network_ensure_for_up() {
         # limpado). Registro ausente e legado tolerado; falha em registro
         # existente interrompe o up para nao ocultar uma reserva perdida.
         network_sync_inventory_reservation "${project}" "${net}" "${subnet}" || return 1
-    else
+    elif [[ "${network_state:-0}" -eq 0 ]]; then
         # A rede existe: divergencia so avisa (nunca bloqueia), mas a reserva
         # e reconciliada com a subnet real (retomada apos falha de reserva).
         local live_subnet live_owner
@@ -567,21 +705,28 @@ network_ensure_for_up() {
             log_warn "A rede ${net} existe mas o label io.cctl.project dela e '${live_owner:-vazio}', nao '${project}'. Confira se ela e mesmo deste projeto."
         fi
         network_sync_inventory_reservation "${project}" "${net}" "${live_subnet:-${subnet}}" || return 1
+    else
+        log_error "Nao consegui consultar a rede Docker ${net}; a subida foi abortada."
+        return 1
     fi
 
     network_ensure_nginx_connected "${net}" "${DOMAIN_NAME:-}" || return 1
     return 0
 }
 
-# Retorna 0 se o nginx-proxy ja esta conectado a rede.
+# Retorna 0 se o nginx-proxy ja esta conectado a rede, 1 se nao esta ou
+# se o proxy esta ausente, e 2 se uma consulta Docker falhar.
 network_proxy_connected() {
     local net="$1"
-    local container="${NGINX_CONTAINER_NAME:-nginx-proxy}"
-    # captura antes do grep: "grep -q" fecha o pipe cedo e, com pipefail,
-    # isso derrubaria o resultado
-    local attached
-    attached=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' \
-        "${container}" 2>/dev/null) || return 1
+    local container="${NGINX_CONTAINER_NAME:-nginx-proxy}" container_state attached
+    if ! container_state="$(docker_object_state container "${container}")"; then
+        return 2
+    fi
+    [[ "${container_state}" == "absent" ]] && return 1
+
+    # Captura o rc do inspect antes de decidir sobre a lista de redes.
+    if attached="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' \
+        "${container}" 2>/dev/null)"; then :; else return 2; fi
     grep -qxF "${net}" <<< "${attached}"
 }
 
@@ -591,36 +736,48 @@ network_proxy_connected() {
 network_connect_nginx() {
     local project_network="$1"
     local alias_name="${2:-${DOMAIN_NAME:-}}"
-    local container="${NGINX_CONTAINER_NAME:-nginx-proxy}"
+    local container="${NGINX_CONTAINER_NAME:-nginx-proxy}" container_state
     local alias_args=()
     [[ -n "${alias_name}" ]] && alias_args=(--alias "${alias_name}")
 
-    docker network connect "${alias_args[@]}" "${project_network}" "${container}" 2>/dev/null || true
-
-    # A politica e deliberada: falha de conexao com proxy existente interrompe
-    # o chamador; proxy ausente so avisa. A pre-condicao de quem precisa do
-    # proxy (_nginx_proxy_require_container) e responsavel por recusar sua falta.
-    # O rc do connect nao decide nada: "ja conectado" tambem falha, entao a
-    # verdade e a lista de redes do proprio proxy.
-    if network_proxy_connected "${project_network}"; then
-        log_success "Nginx conectado a rede ${project_network}"
-        return 0
-    fi
-    if docker inspect "${container}" >/dev/null 2>&1; then
-        log_error "O nginx-proxy existe, mas nao foi conectado a rede ${project_network}. Confira o Docker e a rede; rode 'cctl proxy up' depois de corrigir."
+    if ! container_state="$(docker_object_state container "${container}")"; then
+        log_error "Nao consegui consultar o nginx-proxy; a conexao nao foi confirmada."
         return 1
     fi
-    log_warn "O nginx-proxy nao existe; a conexao com a rede ${project_network} sera tentada quando o proxy for iniciado."
-    return 0
+    if [[ "${container_state}" == "absent" ]]; then
+        log_warn "O nginx-proxy nao existe; a conexao com a rede ${project_network} sera tentada quando o proxy for iniciado."
+        return 0
+    fi
+
+    docker network connect "${alias_args[@]}" "${project_network}" "${container}" 2>/dev/null || true
+
+    # O rc do connect nao decide nada: "ja conectado" tambem falha, entao a
+    # verdade e a lista de redes do proprio proxy.
+    local connected_rc=0
+    network_proxy_connected "${project_network}" || connected_rc=$?
+    if [[ ${connected_rc} -eq 0 ]]; then
+        log_success "Nginx conectado a rede ${project_network}"
+        return 0
+    elif [[ ${connected_rc} -eq 2 ]]; then
+        log_error "Nao consegui consultar as redes do nginx-proxy; a conexao nao foi confirmada."
+        return 1
+    fi
+
+    log_error "O nginx-proxy existe, mas nao foi conectado a rede ${project_network}. Confira o Docker e a rede; rode 'cctl proxy up' depois de corrigir."
+    return 1
 }
 
 # Como network_connect_nginx, mas so conecta se ainda nao estiver conectado
 # (evita aviso em re-execucoes). Uso: network_ensure_nginx_connected <rede> [alias]
 network_ensure_nginx_connected() {
-    local project_network="$1" alias_name="${2:-}"
-    if network_proxy_connected "${project_network}"; then
+    local project_network="$1" alias_name="${2:-}" connected_rc=0
+    network_proxy_connected "${project_network}" || connected_rc=$?
+    if [[ ${connected_rc} -eq 0 ]]; then
         log_debug "nginx-proxy ja esta conectado a rede ${project_network}"
         return 0
+    elif [[ ${connected_rc} -eq 2 ]]; then
+        log_error "Nao consegui consultar as redes do nginx-proxy; a conexao nao foi tentada."
+        return 1
     fi
     network_connect_nginx "${project_network}" "${alias_name}"
 }
@@ -642,9 +799,14 @@ network_disconnect_nginx() {
 # Uso: network_remove_project_network <rede>
 network_remove_project_network() {
     local net="$1"
-    if ! network_exists "${net}"; then
+    local network_state
+    network_exists "${net}" || network_state=$?
+    if [[ "${network_state:-0}" -eq 1 ]]; then
         log_warn "Rede ${net} ja nao existe"
         return 0
+    elif [[ "${network_state:-0}" -eq 2 ]]; then
+        log_error "Nao consegui consultar a rede Docker ${net}; ela nao foi removida."
+        return 1
     fi
 
     network_disconnect_nginx "${net}"
@@ -805,9 +967,14 @@ network_show_details() {
         return 0
     fi
 
-    if ! network_exists "${net}"; then
+    local network_state
+    network_exists "${net}" || network_state=$?
+    if [[ "${network_state:-0}" -eq 1 ]]; then
         log_warn "A rede ${net} do projeto ${project_name} nao existe (rode 'cctl up' para recria-la)"
         return 0
+    elif [[ "${network_state:-0}" -eq 2 ]]; then
+        log_error "Nao consegui consultar a rede Docker ${net}."
+        return 1
     fi
 
     echo -e "Rede Docker da instalacao ${YELLOW}${project_name}${RESET}\n"

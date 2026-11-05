@@ -288,6 +288,22 @@ EOF
     grep -qE "^SSL_KEY_PATH=$" .env
 }
 
+@test "_install_set_ssl_paths: primeira escrita SSL falha, nao tenta segunda nem exporta" {
+    touch .env
+    export DOMAIN_NAME="app.example.com"
+    export SSL_MODE=letsencrypt
+    unset SSL_CERT_PATH SSL_KEY_PATH
+    env_set_var() { echo "$1" >> "${WORKDIR}/env_set.calls"; return 1; }
+
+    local rc
+    if _install_set_ssl_paths; then return 1; else rc=$?; fi
+    [[ ${rc} -eq 1 ]]
+    local calls
+    calls="$(<"${WORKDIR}/env_set.calls")"
+    [[ "${calls}" == "SSL_CERT_PATH" ]]
+    [[ -z "${SSL_CERT_PATH:-}" && -z "${SSL_KEY_PATH:-}" ]]
+}
+
 # ============================================================
 # _install_write_instance_file (F2.4: registro no inventario)
 # ============================================================

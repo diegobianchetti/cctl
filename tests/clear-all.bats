@@ -125,6 +125,46 @@ teardown() {
     assert_output --partial "nao foi removido completamente"
 }
 
+@test "B5 clear-all: pos-filtro falho apos duas consultas saudaveis nao remove e agrega teardown" {
+    mock_cmd docker '
+        echo "docker $*" >> "'"${WORKDIR}"'/docker_calls.log"
+        if [[ "$1 $2" == "volume ls" ]]; then
+            [[ "$*" == *"label=com.docker.compose.project="* ]] && { echo "moodle_dbdata"; exit 0; }
+            echo "moodle_orfao"; exit 0
+        fi
+        exit 0
+    '
+    mock_cmd awk 'printf "moodle_orfao\\n"; exit 42'
+
+    run cmd_clear-all <<< "moodle"
+    assert_failure
+    assert_output --partial "Nao foi possivel listar volumes"
+    assert_output --partial "nao foi removido completamente"
+    run grep -c "volume ls" "${WORKDIR}/docker_calls.log"
+    assert_output "2"
+    run grep -q "volume rm" "${WORKDIR}/docker_calls.log"
+    assert_failure
+}
+
+@test "N2 clear-all: fonte cron presente e CRON_DIR ausente nao deixa teardown incompleto nos modos TTY" {
+    declare -A CCTL_TEST_VOLS=()
+    mock_docker_with_volumes CCTL_TEST_VOLS "${WORKDIR}/docker_calls.log"
+    mkdir -p ./cron
+    : > ./cron/exec-cron-moodle.cron
+    rm -rf "${CRON_DIR}"
+    mock_cmd rm 'printf "rm %s\n" "$*" >> "'"${WORKDIR}"'/rm.calls"; exec /bin/rm "$@"'
+
+    local mode
+    for mode in nonTTY TTY; do
+        [[ "${mode}" == TTY ]] && _core_stdin_is_tty() { return 0; } || _core_stdin_is_tty() { return 1; }
+        run cmd_clear-all <<< "moodle"
+        assert_success
+        refute_output --partial "Falha ao remover cron jobs"
+        refute_output --partial "nao foi removido completamente"
+    done
+    [[ ! -e "${WORKDIR}/rm.calls" ]]
+}
+
 @test "cmd_clear-all: falha ao remover logrotate retorna erro agregado" {
     declare -A CCTL_TEST_VOLS=()
     mock_docker_with_volumes CCTL_TEST_VOLS "${WORKDIR}/docker_calls.log"
@@ -189,6 +229,68 @@ teardown() {
     assert_output --partial "Nenhuma rede registrada"
     run ! grep -q "network rm" "${WORKDIR}/docker_calls.log"
     netsim_has_network "moodle_net"
+}
+
+@test "C6 clear-all: reserva sem CCTL_PROJECT_NETWORK e consulta parcial preserva inventario" {
+    inventory_mark_installed "moodle" "moodle" "c" "moodle.example.com" "${WORKDIR}/inst" "moodle_net" "10.240.0.0/24"
+    mock_cmd docker '
+        echo "docker $*" >> "'"${WORKDIR}"'/docker_calls.log"
+        [[ "$1 $2" == "network ls" ]] && { echo "moodle_net"; exit 42; }
+        exit 0
+    '
+
+    run cmd_clear-all <<< "moodle"
+    assert_failure
+    assert_output --partial "reserva foi preservada"
+    run grep -q "network rm" "${WORKDIR}/docker_calls.log"
+    assert_failure
+    inventory_read "moodle"
+    [[ "${INV_NETWORK}" == "moodle_net" && "${INV_SUBNET}" == "10.240.0.0/24" ]]
+}
+
+@test "N7 clear-all: registro diretorio sem rede no ambiente torna teardown incompleto" {
+    declare -A CCTL_TEST_VOLS=()
+    mock_docker_with_volumes CCTL_TEST_VOLS "${WORKDIR}/docker_calls.log"
+    mkdir -p "${CCTL_INVENTORY_DIR}/moodle.tsv"
+
+    run cmd_clear-all <<< "moodle"
+    assert_failure
+    assert_output --partial "registro de inventario existe mas nao e arquivo regular legivel"
+    assert_output --partial "nao foi removido completamente"
+}
+
+@test "N7 clear-all: registro link para diretorio torna teardown incompleto" {
+    declare -A CCTL_TEST_VOLS=()
+    mock_docker_with_volumes CCTL_TEST_VOLS "${WORKDIR}/docker_calls.log"
+    mkdir -p "${CCTL_INVENTORY_DIR}" "${WORKDIR}/registro-diretorio"
+    ln -s "${WORKDIR}/registro-diretorio" "${CCTL_INVENTORY_DIR}/moodle.tsv"
+
+    run cmd_clear-all <<< "moodle"
+    assert_failure
+    assert_output --partial "registro de inventario existe mas nao e arquivo regular legivel"
+    assert_output --partial "nao foi removido completamente"
+}
+
+@test "N7 clear-all: registro link pendente torna teardown incompleto" {
+    declare -A CCTL_TEST_VOLS=()
+    mock_docker_with_volumes CCTL_TEST_VOLS "${WORKDIR}/docker_calls.log"
+    mkdir -p "${CCTL_INVENTORY_DIR}"
+    ln -s "${WORKDIR}/registro-inexistente" "${CCTL_INVENTORY_DIR}/moodle.tsv"
+
+    run cmd_clear-all <<< "moodle"
+    assert_failure
+    assert_output --partial "registro de inventario existe mas nao e arquivo regular legivel"
+    assert_output --partial "nao foi removido completamente"
+}
+
+@test "N7 clear-all: ausencia real de registro continua no-op" {
+    declare -A CCTL_TEST_VOLS=()
+    mock_docker_with_volumes CCTL_TEST_VOLS "${WORKDIR}/docker_calls.log"
+
+    run cmd_clear-all <<< "moodle"
+    assert_success
+    refute_output --partial "registro de inventario existe mas nao e arquivo regular legivel"
+    refute_output --partial "nao foi removido completamente"
 }
 
 @test "cmd_clear-all: se o 'network rm' falha, NETWORK/SUBNET continuam no inventario e o aviso diz o que fazer" {

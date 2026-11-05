@@ -113,8 +113,8 @@ _install_set_ssl_paths() {
     cert_path=$(ssl_get_cert_path "${DOMAIN_NAME}") || return 1
     key_path=$(ssl_get_key_path "${DOMAIN_NAME}") || return 1
 
-    env_set_var "SSL_CERT_PATH" "${cert_path}"
-    env_set_var "SSL_KEY_PATH" "${key_path}"
+    env_set_var "SSL_CERT_PATH" "${cert_path}" || return 1
+    env_set_var "SSL_KEY_PATH" "${key_path}" || return 1
 }
 
 # Cria (ou reaproveita) a rede do projeto — logica em

@@ -291,7 +291,12 @@ _nginx_proxy_require_container() {
 
 # Para e remove o container do proxy. Avisa (sem falhar) se nao existir.
 nginx_proxy_down() {
-    if ! docker inspect "${NGINX_CONTAINER_NAME}" >/dev/null 2>&1; then
+    local container_state
+    if ! container_state="$(docker_object_state container "${NGINX_CONTAINER_NAME}")"; then
+        log_error "Nao consegui consultar o container ${NGINX_CONTAINER_NAME}; nenhuma acao foi executada."
+        return 1
+    fi
+    if [[ "${container_state}" == "absent" ]]; then
         msg_warn "Container ${NGINX_CONTAINER_NAME} nao existe"
         return 0
     fi

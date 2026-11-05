@@ -79,16 +79,13 @@ teardown() {
 }
 
 @test "volumes_list_for_project: prefixo literal nao interpreta metacaractere de regex do nome do projeto" {
-    # O filtro real de "docker volume ls --filter name=X" ja e substring
-    # LITERAL (sem suporte a regex) e, por isso, sozinho ja barraria
-    # qualquer volume que nao contenha X como substring — o que esconderia
-    # uma regressao no POS-filtro (awk index(), lib/volumes.sh) caso ele
-    # fosse trocado por algo como `grep -E "^${project_name}_"` (interpola o
-    # nome do projeto — vindo de project.conf, nunca revalidado em runtime —
-    # direto num padrao de regex). Este mock ignora deliberadamente o filtro
-    # recebido e devolve TODOS os candidatos, isolando a seguranca no
-    # pos-filtro de producao (pior caso: se o pre-filtro do Docker um dia
-    # se comportar diferente, o pos-filtro precisa segurar sozinho).
+    # O filtro real de "docker volume ls --filter name=X" usa regex no Moby
+    # atual; por isso ele nao e a prova do isolamento literal. Este mock
+    # ignora deliberadamente o filtro e devolve TODOS os candidatos, isolando
+    # a seguranca no POS-filtro (awk index(), lib/volumes.sh). Se ele virar
+    # `grep -E "^${project_name}_"`, o nome vindo de project.conf seria
+    # interpolado como regex; o pos-filtro de producao precisa segurar esse
+    # pior caso sozinho.
     #
     # project_name = "a.b" (o "." e metacaractere ERE = "qualquer
     # caractere"). "a.b_data" comeca literalmente com "a.b_" (deve entrar).
@@ -127,4 +124,18 @@ teardown() {
     run cat "${WORKDIR}/docker_calls.log"
     assert_output --partial "moodle_dbdata"
     refute_output --partial "moodle-lab_dbdata"
+}
+
+@test "C6 volumes_clear: listagem parcial com erro nao remove nenhum volume" {
+    mock_cmd docker '
+        echo "docker $*" >> "'"${WORKDIR}"'/docker_calls.log"
+        [[ "$1 $2" == "volume ls" ]] && { echo "moodle_dbdata"; exit 42; }
+        exit 0
+    '
+
+    run volumes_clear <<< "moodle"
+    assert_failure
+    assert_output --partial "nenhuma remocao foi feita"
+    run grep -q "volume rm" "${WORKDIR}/docker_calls.log"
+    assert_failure
 }

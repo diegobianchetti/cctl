@@ -170,6 +170,42 @@ teardown() {
     [[ "${INV_SUBNET}" == "10.240.4.0/24" ]]
 }
 
+@test "N7 destroy: registro link pendente faz clear-all falhar e preserva instancia" {
+    export COMPOSE_PROJECT_NAME="app1"
+    export CCTL_LOG_DIR="${WORKDIR}/logs"
+    export CCTL_LOG_FILE=""
+    export CRON_DIR="${WORKDIR}/cron"
+    export LOGROTATE_DIR="${WORKDIR}/logrotate"
+    mkdir -p "${CCTL_INVENTORY_DIR}" "${CRON_DIR}" "${LOGROTATE_DIR}"
+    ln -s "${WORKDIR}/registro-inexistente" "${CCTL_INVENTORY_DIR}/app1.tsv"
+    declare -A CCTL_TEST_VOLS=()
+    mock_docker_with_volumes CCTL_TEST_VOLS "${WORKDIR}/docker_calls.log"
+
+    cd "${INSTANCE_DIR}" || return 1
+    run bash -c '
+        source "'"${CCTL_ROOT}"'/lib/colors.sh"
+        source "'"${CCTL_ROOT}"'/lib/log.sh"
+        source "'"${CCTL_ROOT}"'/lib/core.sh"
+        source "'"${CCTL_ROOT}"'/lib/inventory.sh"
+        source "'"${CCTL_ROOT}"'/lib/network.sh"
+        source "'"${CCTL_ROOT}"'/lib/volumes.sh"
+        source "'"${CCTL_ROOT}"'/lib/compose.sh"
+        source "'"${CCTL_ROOT}"'/lib/cron.sh"
+        source "'"${CCTL_ROOT}"'/lib/nginx.sh"
+        export CCTL_ROOT="'"${CCTL_ROOT}"'"
+        export CCTL_INVENTORY_DIR="'"${CCTL_INVENTORY_DIR}"'"
+        export CRON_DIR="'"${CRON_DIR}"'"
+        export LOGROTATE_DIR="'"${LOGROTATE_DIR}"'"
+        source "'"${CCTL_ROOT}"'/commands/destroy.sh"
+        printf "app1\\napp1\\n" | cmd_destroy
+    '
+    assert_failure
+    assert_output --partial "registro de inventario existe mas nao e arquivo regular legivel"
+    assert_output --partial "Destroy interrompido"
+    [[ -d "${INSTANCE_DIR}" ]]
+    [[ -L "${CCTL_INVENTORY_DIR}/app1.tsv" ]]
+}
+
 @test "cmd_destroy: volume recusado com rede removida preserva diretorio e inventario" {
     export COMPOSE_PROJECT_NAME="app1" DOMAIN_NAME="app1.example.com"
     export CCTL_PROJECT_NETWORK="app1_net" COMPOSE_PROJECT_SUBNET="10.240.4.0/24"
@@ -185,6 +221,7 @@ teardown() {
         case "$1 $2" in
             "volume ls") echo "app1_dbdata"; exit 0 ;;
             "volume rm") exit 1 ;;
+            "network ls") echo "app1_net"; exit 0 ;;
             "network inspect") exit 0 ;;
             "network disconnect") exit 0 ;;
             "network rm") touch "'"${WORKDIR}"'/network_removed"; exit 0 ;;

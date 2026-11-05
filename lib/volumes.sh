@@ -3,8 +3,9 @@
 
 # Lista os nomes dos volumes Docker do projeto (usado por volumes_list,
 # volumes_clear, clear-all, status e backup). O filtro "name=" do
-# `docker volume ls` faz match por SUBSTRING (nao aceita "^" de ancora), o
-# que faz um projeto "moodle" tambem casar volumes de "moodle-lab" — colisao
+# `docker volume ls --filter name=` usa regex no Moby 24+, mas ainda recebe
+# um nome controlado pelo projeto; o pos-filtro literal evita colisao de prefixo.
+# Isso impede um projeto "moodle" de casar volumes de "moodle-lab" — colisao
 # conhecida como bug B1 (antes tambem afetava a busca de redes, que hoje usa
 # CCTL_PROJECT_NETWORK do .env e nao procura mais por nome).
 #
@@ -28,19 +29,20 @@ volumes_list_for_project() {
     local project_name="$1"
     local by_label by_name
 
-    # Label exato do compose (nao sofre colisao de prefixo)
-    by_label=$(docker volume ls -q --filter "label=com.docker.compose.project=${project_name}")
+    # Cada consulta e capturada antes do processamento: lista parcial nunca
+    # vira uma lista valida para backup ou remocao.
+    by_label=$(docker volume ls -q --filter "label=com.docker.compose.project=${project_name}") || return 1
+    by_name=$(docker volume ls -q --filter "name=${project_name}") || return 1
+    by_name=$(awk -v p="${project_name}_" 'index($0,p)==1' <<< "${by_name}") || return 1
 
-    # Filtro por nome (substring, o volume ls nao aceita "^") + pos-filtro
-    # de prefixo literal "<projeto>_" (cobre volumes orfaos/sem label)
-    by_name=$(docker volume ls -q --filter "name=${project_name}" \
-        | awk -v p="${project_name}_" 'index($0,p)==1')
-
-    # printf sempre com exit 0 (mesmo com string vazia) e sed remove as
-    # linhas em branco resultantes — evita depender de `[[ -n ]] && printf`
-    # dentro do grupo, que sob `set -e` do chamador aborta o script quando
-    # ambos os ramos vem vazios (o `&&` propaga o status de falha do teste).
-    printf '%s\n%s\n' "${by_label}" "${by_name}" | sed '/^$/d' | sort -u
+    # Cada estagio e capturado separadamente: a funcao pode ser chamada num
+    # contexto sem pipefail, onde o rc de awk/sed/sort nao pode se perder.
+    local combined filtered sorted
+    combined=$(printf '%s\n%s\n' "${by_label}" "${by_name}") || return 1
+    filtered=$(sed '/^$/d' <<< "${combined}") || return 1
+    [[ -n "${filtered}" ]] || return 0
+    sorted=$(sort -u <<< "${filtered}") || return 1
+    printf '%s\n' "${sorted}"
 }
 
 # Lista os bind mounts (host paths) do compose do projeto atual — bash puro,
@@ -115,7 +117,10 @@ volumes_list() {
     # 1. Volumes Docker (named volumes)
     echo -e "${YELLOW}=== Volumes Docker ===${RESET}"
     local volumes
-    volumes=$(volumes_list_for_project "${project_name}")
+    if ! volumes=$(volumes_list_for_project "${project_name}"); then
+        log_error "Nao foi possivel listar volumes do projeto ${project_name}"
+        return 1
+    fi
 
     if [[ -n "${volumes}" ]]; then
         local vol mountpoint
@@ -171,13 +176,20 @@ volumes_clear() {
     # Remove volumes
     msg_step "ETAPA 2/2" "Removendo volumes..."
     local volumes
-    volumes=$(volumes_list_for_project "${project_name}")
+    if ! volumes=$(volumes_list_for_project "${project_name}"); then
+        log_error "Nao foi possivel listar volumes do projeto ${project_name}; nenhuma remocao foi feita."
+        return 1
+    fi
 
     if [[ -n "${volumes}" ]]; then
         echo -e "${BLUE}Volumes encontrados (inclui volumes orfaos sem label do compose):${RESET}"
         echo "${volumes}" | sed 's/^/  - /'
-        echo "${volumes}" | xargs -r docker volume rm
-        msg_success "Volumes removidos"
+        if echo "${volumes}" | xargs -r docker volume rm; then
+            msg_success "Volumes removidos"
+        else
+            log_error "Falha ao remover um ou mais volumes"
+            return 1
+        fi
     else
         msg_info "Nenhum volume encontrado"
     fi
