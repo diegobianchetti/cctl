@@ -95,14 +95,13 @@ ssl_cert_exists() {
 # Dispatcher principal — chama o handler do modo configurado
 ssl_issue() {
     local domain="${1:-${DOMAIN_NAME}}"
-
-    if _ssl_is_local_domain "${domain}"; then
-        log_debug "Dominio local (${domain}), pulando SSL"
-        return 0
-    fi
-
     local mode
     mode=$(_ssl_mode)
+
+    if [[ "${mode}" == "letsencrypt" ]] && _ssl_is_local_domain "${domain}"; then
+        log_error "Let's Encrypt nao emite certificado para dominio local ${domain}; use SSL_MODE=self-signed, manual ou none"
+        return 1
+    fi
 
     case "${mode}" in
         self-signed) _ssl_issue_self_signed "${domain}" ;;
