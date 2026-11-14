@@ -39,7 +39,7 @@ _ssl_usage() {
     echo "Acoes:"
     echo "  status [dominio]   Exibe modo SSL, caminho do certificado e data de expiracao"
     echo "  issue [dominio]    Emite/instala o certificado conforme SSL_MODE"
-    echo "  renew [dominio]    Renova o certificado conforme SSL_MODE"
+    echo "  renew [dominio]    Renova o certificado conforme SSL_MODE (letsencrypt: renova todos os do proxy que estao perto de vencer)"
     echo "  help               Exibe esta ajuda"
     echo ""
     echo "Dominio e opcional — usa DOMAIN_NAME do manifest quando omitido."

@@ -510,6 +510,109 @@ _mock_docker_ssl() {
     grep -q -- "exec nginx-proxy certbot renew --quiet" "${WORKDIR}/docker.log"
 }
 
+# Pendencia 2026-11-14 (teste de producao): o certbot renew devolve rc 0
+# tambem quando nada estava perto de vencer, e o cctl dizia "Certificados
+# renovados". A mensagem agora compara o notAfter do dominio antes e depois.
+_le_cert_for_renew() {
+    mkdir -p "${LETSENCRYPT_LIVE_DIR}/app.example.com"
+    make_test_keypair "${LETSENCRYPT_LIVE_DIR}/app.example.com/fullchain.pem" \
+        "${LETSENCRYPT_LIVE_DIR}/app.example.com/privkey.pem" "app.example.com"
+}
+
+@test "ssl_renew: letsencrypt sem renovacao real nao diz que renovou" {
+    export SSL_MODE="letsencrypt"
+    _le_cert_for_renew
+    _mock_docker_ssl
+
+    run ssl_renew "app.example.com"
+    assert_success
+    assert_output --partial "Certificado de app.example.com sem alteracao de validade"
+    assert_output --partial "vence em"
+    refute_output --partial "Certificados renovados"
+    refute_output --partial "Nenhum certificado precisava renovar"
+}
+
+@test "ssl_renew: letsencrypt com certificado trocado pelo certbot informa a renovacao" {
+    export SSL_MODE="letsencrypt"
+    _le_cert_for_renew
+    local live="${LETSENCRYPT_LIVE_DIR}/app.example.com"
+    # O "certbot renew" do mock reemite o certificado com outra validade.
+    mock_cmd docker '
+        echo "$*" >> "'"${WORKDIR}"'/docker.log"
+        [[ "$1" == "inspect" ]] && exit 0
+        if [[ "$*" == *"certbot renew"* ]]; then
+            openssl req -x509 -nodes -days 90 -newkey rsa:2048 \
+                -keyout "'"${live}"'/privkey.pem" -out "'"${live}"'/fullchain.pem" \
+                -subj "/CN=app.example.com" &>/dev/null
+        fi
+        exit 0
+    '
+
+    run ssl_renew "app.example.com"
+    assert_success
+    assert_output --partial "Certificado de app.example.com renovado"
+    assert_output --partial "vence em"
+    refute_output --partial "sem alteracao de validade"
+}
+
+@test "ssl_renew: letsencrypt sem validade anterior nao afirma que renovou" {
+    export SSL_MODE="letsencrypt"
+    local live="${LETSENCRYPT_LIVE_DIR}/app.example.com"
+    # Antes do renew nao ha certificado legivel; o certbot do mock o cria.
+    mock_cmd docker '
+        echo "$*" >> "'"${WORKDIR}"'/docker.log"
+        [[ "$1" == "inspect" ]] && exit 0
+        if [[ "$*" == *"certbot renew"* ]]; then
+            mkdir -p "'"${live}"'"
+            openssl req -x509 -nodes -days 90 -newkey rsa:2048 \
+                -keyout "'"${live}"'/privkey.pem" -out "'"${live}"'/fullchain.pem" \
+                -subj "/CN=app.example.com" &>/dev/null
+        fi
+        exit 0
+    '
+
+    run ssl_renew "app.example.com"
+    assert_success
+    assert_output --partial "Renovacao executada (app.example.com vence em"
+    refute_output --partial "renovado"
+    refute_output --partial "sem alteracao de validade"
+}
+
+@test "ssl_renew: outro dominio renovado pelo renew global nao vira conclusao sobre o consultado" {
+    export SSL_MODE="letsencrypt"
+    _le_cert_for_renew
+    local other="${LETSENCRYPT_LIVE_DIR}/outro.example.com"
+    mkdir -p "${other}"
+    make_test_keypair "${other}/fullchain.pem" "${other}/privkey.pem" "outro.example.com"
+    # O renew global so reemite o OUTRO dominio.
+    mock_cmd docker '
+        echo "$*" >> "'"${WORKDIR}"'/docker.log"
+        [[ "$1" == "inspect" ]] && exit 0
+        if [[ "$*" == *"certbot renew"* ]]; then
+            openssl req -x509 -nodes -days 90 -newkey rsa:2048 \
+                -keyout "'"${other}"'/privkey.pem" -out "'"${other}"'/fullchain.pem" \
+                -subj "/CN=outro.example.com" &>/dev/null
+        fi
+        exit 0
+    '
+
+    run ssl_renew "app.example.com"
+    assert_success
+    assert_output --partial "Certificado de app.example.com sem alteracao de validade"
+    assert_output --partial "renovacao dos certificados do proxy executada"
+    refute_output --partial "Nenhum certificado precisava renovar"
+}
+
+@test "ssl_renew: letsencrypt sem validade legivel avisa e mantem o rc do certbot" {
+    export SSL_MODE="letsencrypt"
+    _mock_docker_ssl
+
+    run ssl_renew "app.example.com"
+    assert_success
+    assert_output --partial "validade nao verificada"
+    refute_output --partial "Certificados renovados"
+}
+
 @test "ssl_renew: letsencrypt falha quando o container do proxy nao existe" {
     export SSL_MODE="letsencrypt"
     DOCKER_CONTAINER_EXISTS=0 _mock_docker_ssl

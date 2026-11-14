@@ -310,3 +310,16 @@ teardown() {
     [[ "${INV_NETWORK}" == "moodle_net" ]]
     [[ "${INV_SUBNET}" == "10.240.0.0/24" ]]
 }
+
+@test "cmd_clear-all: EOF na confirmacao (stdin fechado, modo estrito) cancela com mensagem" {
+    run bash -euo pipefail -c '
+        for f in colors log core inventory network volumes compose nginx vhost cron; do
+            source "'"${CCTL_ROOT}"'/lib/${f}.sh"
+        done
+        source "'"${CCTL_ROOT}"'/commands/clear-all.sh"
+        cmd_clear-all < /dev/null
+    '
+    assert_failure
+    assert_output --partial "Operacao cancelada"
+    refute_output --partial "ETAPA 1/6"
+}

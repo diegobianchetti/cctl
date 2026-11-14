@@ -13,18 +13,22 @@ cmd_destroy() {
     echo -e "${RED}Alem de remover containers, volumes e configs, o diretorio sera APAGADO.${RESET}"
     echo ""
 
-    read -rp "Digite exatamente o nome do projeto para confirmar: " confirmation
+    # EOF (stdin fechado) vira resposta vazia: cancela com mensagem em vez de
+    # encerrar calado sob `set -e`.
+    local confirmation=""
+    read -rp "Digite exatamente o nome do projeto para confirmar: " confirmation || confirmation=""
     echo ""
 
-    if [[ "${confirmation}" != "${project_name}" ]]; then
+    if [[ -z "${confirmation}" || "${confirmation}" != "${project_name}" ]]; then
         msg_error "Confirmacao falhou!"
         msg_warn "Operacao cancelada."
         return 1
     fi
 
-    # Executa clear-all
+    # Executa o teardown do clear-all sem a confirmacao dele: o operador ja
+    # confirmou acima (uma pergunta so).
     source "${CCTL_ROOT}/commands/clear-all.sh"
-    if ! cmd_clear-all; then
+    if ! clear_all_run; then
         msg_error "Destroy interrompido: o teardown nao terminou. Diretorio e registro do inventario foram preservados para voce retomar a limpeza."
         return 1
     fi

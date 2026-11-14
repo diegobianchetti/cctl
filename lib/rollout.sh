@@ -642,6 +642,17 @@ _rollout_drain() {
         container="$(_rollout_slot_container "${service}" "green")"
         docker stop "${container}" >/dev/null 2>&1 || true
         docker rm "${container}" >/dev/null 2>&1 || true
+        # Confere a remocao antes de anuncia-la (ausencia ja e o estado
+        # desejado, entao um rm de container inexistente nao e falha).
+        local green_state=""
+        if ! green_state="$(docker_object_state container "${container}")"; then
+            log_warn "Nao foi possivel confirmar a remocao do slot anterior (green): ${container}."
+            return 1
+        fi
+        if [[ "${green_state}" == "present" ]]; then
+            log_warn "O slot anterior (green) continua existindo: ${container}. Remova manualmente: docker rm -f ${container}"
+            return 1
+        fi
     else
         compose_exec stop "${service}" || {
             log_warn "Falha ao parar o slot anterior (${slot}/${service}) via compose — verifique manualmente."
@@ -649,7 +660,13 @@ _rollout_drain() {
         }
     fi
 
-    msg_success "Slot anterior (${slot}) drenado."
+    # O slot blue e o servico do compose: fica parado (a definicao continua
+    # no compose). O green e um container avulso do rollout: e removido.
+    if [[ "${slot}" == "green" ]]; then
+        msg_success "Slot anterior (green) drenado: container avulso removido."
+    else
+        msg_success "Slot anterior (blue) drenado: servico do compose parado."
+    fi
 }
 
 # --- Estado --------------------------------------------------------------------
@@ -1077,11 +1094,21 @@ rollout_status() {
         live_slot="$(_rollout_resolve_live_slot "${service}")"
     fi
 
-    local container status="" health=""
+    local container status="" health="" live_image=""
     container="$(_rollout_slot_container "${service}" "${live_slot}")"
     if docker inspect "${container}" >/dev/null 2>&1; then
         status="$(docker inspect -f '{{.State.Status}}' "${container}" 2>/dev/null)" || true
-        health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' "${container}" 2>/dev/null)" || true
+        # Sem HEALTHCHECK do Docker na imagem, .State.Health nao existe; o
+        # rollout valida a saude por HTTP, que o status nao reexecuta.
+        if [[ "$(docker inspect -f '{{if .State.Health}}yes{{end}}' "${container}" 2>/dev/null)" == "yes" ]]; then
+            health="$(docker inspect -f '{{.State.Health.Status}}' "${container}" 2>/dev/null)" || true
+        else
+            health="sem HEALTHCHECK ativo no container"
+        fi
+        # Imagem real do slot live: o estado so a grava quando o rollout
+        # recebe --image.
+        live_image="$(docker inspect -f '{{.Config.Image}}' "${container}" 2>/dev/null)" || true
+        [[ -n "${live_image}" ]] && image="${live_image}"
     else
         msg_warn "Container ${container} nao encontrado."
     fi

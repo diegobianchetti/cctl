@@ -271,7 +271,7 @@ Apos instalado, todos os comandos operacionais ficam disponiveis:
 |---------|-----------|
 | `cctl ssl status [dominio]` | Modo SSL, caminho do certificado e data de expiracao |
 | `cctl ssl issue [dominio]` | Emite/instala o certificado conforme `SSL_MODE` |
-| `cctl ssl renew [dominio]` | Renova o certificado conforme `SSL_MODE` |
+| `cctl ssl renew [dominio]` | Renova o certificado conforme `SSL_MODE`. Em `letsencrypt`, o `certbot renew` atua sobre **todos** os certificados do proxy e só reemite os que estão perto de vencer; a mensagem diz se o certificado do domínio mudou |
 | `cctl ssl help` | Exibe esta ajuda |
 
 Dominio e opcional em todas as acoes — usa `DOMAIN_NAME` do manifest quando
@@ -325,7 +325,7 @@ em `${CCTL_INVENTORY_DIR}` (por padrão, `${CCTL_INSTANCE_BASE_DIR}/.inventory`)
 |---------|-----------|
 | `cctl rollout bluegreen [--service <svc>] [--image <ref>]` | Sobe a nova versao em slot paralelo, testa saude e troca o trafego no nginx sem downtime |
 | `cctl rollout rolling [--service <svc>] [--image <ref>]` | Recreate seguro do slot atual (mesmo alias), com rollback automatico se o healthcheck falhar |
-| `cctl rollout status` | Slot live, container, saude, alvo do vhost e imagem em uso |
+| `cctl rollout status` | Slot live, container, saude (estado do `HEALTHCHECK` do Docker, ou "sem HEALTHCHECK ativo no container"), alvo do vhost e imagem real do container live |
 | `cctl rollout help` | Exibe o uso sintetico de `cctl rollout` |
 | `--health-mode auto\|docker\|http` | Estrategia de sonda (default `auto`: usa `docker` se o servico declara `healthcheck:`, senao `http`) |
 | `--timeout <s>` \| `--health-path <p>` \| `--health-port <p>` | Ajustam o healthcheck (timeout total, path e porta da sonda HTTP) |
@@ -369,6 +369,7 @@ cctl rollout rolling --service moodle-app --image ghcr.io/acme/moodle-app:2.5.2
 - O override de compose usa `extends:`, um recurso do `docker compose` validado com `docker compose` real na VM de lab (heranca de `depends_on`, `--no-deps` subindo somente o candidato); a suite de testes automatizados continua usando mocks e nao pode atestar o `extends:` em si (ver `WORK_LOG.md`/handoff da Sprint 5).
 - `cctl rollout rolling` **nao** serve para introduzir um segundo slot: o candidato e sempre o proprio servico do compose (`--force-recreate`), o que implica um breve intervalo sem esse container durante a recriacao.
 - **A imagem nova do rollout NAO e persistida em lugar nenhum** — o override runtime (`docker-compose.rollout.yaml`) e efemero e sempre removido ao final. O `.env`/compose da instancia continuam declarando a imagem antiga; um `cctl up` ou `cctl update` posterior **reverte silenciosamente** a versao em producao para o que estiver no `.env`. O rollout (`bluegreen`/`rolling`) e o mecanismo de troca de trafego/recreate seguro, nao o mecanismo de persistir a versao — para tornar a nova imagem permanente, atualize a variavel de imagem correspondente no `.env` da instancia apos confirmar o rollout.
+- **O dreno trata os dois slots de forma diferente, de proposito.** O slot `blue` e o servico do compose: no dreno ele e **parado** (`compose stop`), e a definicao continua no compose. O slot `green` e um container avulso criado pelo rollout: no dreno ele e **removido** (`docker stop` + `docker rm`). Por isso, depois de voltar para o blue, o green nao aparece mais em `docker ps -a`, e depois de ir para o green o blue aparece como `Exited`.
 - **O restante do `cctl` nao conhece o slot green.** `cctl ps`, `cctl stop`, `cctl down` e `cctl up` operam apenas sobre o compose base (sem o override do rollout) — o container `<svc>-green` aparece para eles como um container "orfao" da rede/projeto. Em particular, `cctl up --remove-orphans` (ou o equivalente `docker compose ... --remove-orphans`) pode derrubar o slot green **mesmo que ele esteja em trafego** apos um rollout. Evite `--remove-orphans` em instancias com um rollout Blue/Green ativo; confira `cctl rollout status` antes.
 
 ### Banco de dados

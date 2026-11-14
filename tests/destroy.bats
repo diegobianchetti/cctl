@@ -2,7 +2,7 @@
 # tests/destroy.bats — testes para commands/destroy.sh (F2.4: ordem entre
 # remocao do diretorio e remocao do registro de inventario)
 #
-# Isolamento: cmd_clear-all e stubado (fake CCTL_ROOT/commands/clear-all.sh)
+# Isolamento: clear_all_run e stubado (fake CCTL_ROOT/commands/clear-all.sh)
 # para nao puxar compose/docker/network/cron reais — o que importa aqui e
 # so o comportamento de destroy.sh em si: confirmacao, remocao do diretorio
 # e a ordem com inventory_remove.
@@ -21,7 +21,7 @@ setup() {
     export CCTL_INVENTORY_DIR="${WORKDIR}/inventory"
     mock_sudo_passthrough
 
-    # Stub de cmd_clear-all: destroy.sh faz
+    # Stub de clear_all_run: destroy.sh faz
     # "source \"${CCTL_ROOT}/commands/clear-all.sh\"" com CCTL_ROOT real do
     # projeto no momento do source do PROPRIO destroy.sh (abaixo). Para
     # isolar do compose/docker/network real, trocamos CCTL_ROOT por um
@@ -29,8 +29,12 @@ setup() {
     FAKE_CCTL_ROOT="${WORKDIR}/fake-cctl-root"
     mkdir -p "${FAKE_CCTL_ROOT}/commands"
     cat > "${FAKE_CCTL_ROOT}/commands/clear-all.sh" <<'EOF'
-cmd_clear-all() {
+clear_all_run() {
     echo "STUB-CLEAR-ALL-CHAMADO"
+}
+cmd_clear-all() {
+    echo "STUB-CMD-CLEAR-ALL-COM-CONFIRMACAO-NAO-DEVE-SER-CHAMADO"
+    return 1
 }
 EOF
 
@@ -156,7 +160,7 @@ teardown() {
         export CCTL_ROOT="'"${CCTL_ROOT}"'"
         export CCTL_INVENTORY_DIR="'"${CCTL_INVENTORY_DIR}"'"
         source "'"${CCTL_ROOT}"'/commands/destroy.sh"
-        printf "app1\\napp1\\n" | cmd_destroy
+        printf "app1\\n" | cmd_destroy
     '
     assert_failure
     assert_output --partial "network rm app1_net"
@@ -197,7 +201,7 @@ teardown() {
         export CRON_DIR="'"${CRON_DIR}"'"
         export LOGROTATE_DIR="'"${LOGROTATE_DIR}"'"
         source "'"${CCTL_ROOT}"'/commands/destroy.sh"
-        printf "app1\\napp1\\n" | cmd_destroy
+        printf "app1\\n" | cmd_destroy
     '
     assert_failure
     assert_output --partial "registro de inventario existe mas nao e arquivo regular legivel"
@@ -243,7 +247,7 @@ teardown() {
         export CCTL_ROOT="'"${CCTL_ROOT}"'"
         export CCTL_INVENTORY_DIR="'"${CCTL_INVENTORY_DIR}"'"
         source "'"${CCTL_ROOT}"'/commands/destroy.sh"
-        printf "app1\\napp1\\n" | cmd_destroy
+        printf "app1\\n" | cmd_destroy
     '
     assert_failure
     assert_output --partial "Falha ao remover um ou mais volumes"
@@ -255,4 +259,125 @@ teardown() {
     # A rede saiu de fato, portanto seus campos sao limpos; o registro da
     # instancia permanece porque o volume ainda exige retomada do teardown.
     [[ -z "${INV_NETWORK}" && -z "${INV_SUBNET}" ]]
+}
+
+# Pendencia 2026-11-14 (teste de producao): o destroy confirmava e depois
+# chamava cmd_clear-all inteiro, que pedia a MESMA confirmacao de novo. Com o
+# nome uma unica vez no stdin, a segunda leitura recebia EOF e o destroy dizia
+# "teardown nao terminou" sem ter removido nada. Exercita o clear-all REAL.
+@test "cmd_destroy: uma unica confirmacao basta com o clear-all real (sem segunda leitura)" {
+    export COMPOSE_PROJECT_NAME="app1" DOMAIN_NAME="app1.example.com"
+    export CCTL_PROJECT_NETWORK="app1_net" COMPOSE_PROJECT_SUBNET="10.240.4.0/24"
+    export CCTL_LOG_DIR="${WORKDIR}/logs" CCTL_LOG_FILE=""
+    export CRON_DIR="${WORKDIR}/cron" LOGROTATE_DIR="${WORKDIR}/logrotate"
+    export NGINX_VHOSTS_DIR="${WORKDIR}/vhosts.d" NGINX_CONTAINER_NAME="nginx-proxy"
+    mkdir -p "${CRON_DIR}" "${LOGROTATE_DIR}" "${NGINX_VHOSTS_DIR}"
+    echo "server { listen 443; }" > "${NGINX_VHOSTS_DIR}/app1.conf"
+    inventory_mark_installed "app1" "moodle" "app1" "app1.example.com" "${INSTANCE_DIR}" "app1_net" "10.240.4.0/24"
+
+    mock_cmd docker '
+        echo "$*" >> "'"${WORKDIR}"'/docker_calls.log"
+        case "$1 $2" in
+            "volume ls") echo "app1_dbdata"; exit 0 ;;
+            "volume rm") touch "'"${WORKDIR}"'/volume_removed"; exit 0 ;;
+            "network ls") echo "app1_net"; exit 0 ;;
+            "network inspect") exit 0 ;;
+            "network disconnect") exit 0 ;;
+            "network rm") touch "'"${WORKDIR}"'/network_removed"; exit 0 ;;
+        esac
+        exit 0
+    '
+
+    cd "${INSTANCE_DIR}" || return 1
+    run bash -c '
+        source "'"${CCTL_ROOT}"'/lib/colors.sh"
+        source "'"${CCTL_ROOT}"'/lib/log.sh"
+        source "'"${CCTL_ROOT}"'/lib/core.sh"
+        source "'"${CCTL_ROOT}"'/lib/inventory.sh"
+        source "'"${CCTL_ROOT}"'/lib/network.sh"
+        source "'"${CCTL_ROOT}"'/lib/volumes.sh"
+        source "'"${CCTL_ROOT}"'/lib/compose.sh"
+        source "'"${CCTL_ROOT}"'/lib/cron.sh"
+        source "'"${CCTL_ROOT}"'/lib/nginx.sh"
+        source "'"${CCTL_ROOT}"'/lib/vhost.sh"
+        export CCTL_ROOT="'"${CCTL_ROOT}"'"
+        export CCTL_INVENTORY_DIR="'"${CCTL_INVENTORY_DIR}"'"
+        source "'"${CCTL_ROOT}"'/commands/destroy.sh"
+        printf "app1\\n" | cmd_destroy
+    '
+    assert_success
+    refute_output --partial "Confirmacao falhou"
+    refute_output --partial "Destroy interrompido"
+    assert_output --partial "destruida completamente"
+    # So a confirmacao do destroy: o banner de confirmacao do clear-all (que
+    # precede a segunda leitura) nao pode aparecer. O prompt do `read -rp` nao
+    # serve de prova porque o bash so o imprime com stdin em TTY.
+    assert_output --partial "DESTROY: REMOCAO COMPLETA DA INSTANCIA"
+    refute_output --partial "ESTA OPERACAO REMOVERA TODOS OS DADOS"
+    [[ -e "${WORKDIR}/volume_removed" && -e "${WORKDIR}/network_removed" ]]
+    # Teardown integral, nao so a confirmacao: vhost removido e nenhuma
+    # funcao ausente tolerada no caminho feliz.
+    refute_output --partial "command not found"
+    refute_output --partial "Falha ao limpar config nginx"
+    [[ ! -e "${NGINX_VHOSTS_DIR}/app1.conf" ]]
+    [[ ! -d "${INSTANCE_DIR}" ]]
+    [[ ! -f "${CCTL_INVENTORY_DIR}/app1.tsv" ]]
+}
+
+@test "cmd_destroy: confirmacao recusada no destroy nao diz que o teardown ficou incompleto" {
+    export COMPOSE_PROJECT_NAME="app1"
+    cd "${INSTANCE_DIR}" || return 1
+    run bash -c '
+        source "'"${CCTL_ROOT}"'/lib/colors.sh"
+        source "'"${CCTL_ROOT}"'/lib/log.sh"
+        source "'"${CCTL_ROOT}"'/lib/core.sh"
+        source "'"${CCTL_ROOT}"'/lib/inventory.sh"
+        export CCTL_ROOT="'"${FAKE_CCTL_ROOT}"'"
+        source "'"${CCTL_ROOT}"'/commands/destroy.sh"
+        printf "outro\\n" | cmd_destroy
+    '
+    assert_failure
+    assert_output --partial "Operacao cancelada"
+    refute_output --partial "teardown nao terminou"
+    refute_output --partial "STUB-CLEAR-ALL-CHAMADO"
+    [[ -d "${INSTANCE_DIR}" ]]
+}
+
+# AUDITORIA_1 (achados pre-v1), ajuste 4: sob o `set -euo pipefail` do entry
+# point, o `read` desprotegido com stdin fechado (EOF) encerrava o shell antes
+# da mensagem de cancelamento.
+@test "cmd_destroy: EOF na confirmacao (stdin fechado, modo estrito) cancela com mensagem" {
+    export COMPOSE_PROJECT_NAME="app1"
+    cd "${INSTANCE_DIR}" || return 1
+    run bash -euo pipefail -c '
+        source "'"${CCTL_ROOT}"'/lib/colors.sh"
+        source "'"${CCTL_ROOT}"'/lib/log.sh"
+        source "'"${CCTL_ROOT}"'/lib/core.sh"
+        source "'"${CCTL_ROOT}"'/lib/inventory.sh"
+        export CCTL_ROOT="'"${FAKE_CCTL_ROOT}"'"
+        source "'"${CCTL_ROOT}"'/commands/destroy.sh"
+        cmd_destroy < /dev/null
+    '
+    assert_failure
+    assert_output --partial "Operacao cancelada"
+    refute_output --partial "STUB-CLEAR-ALL-CHAMADO"
+    [[ -d "${INSTANCE_DIR}" ]]
+}
+
+@test "cmd_destroy: nome do projeto vazio com EOF nao confirma (vazio nao casa com vazio)" {
+    export COMPOSE_PROJECT_NAME=""
+    cd "${INSTANCE_DIR}" || return 1
+    run bash -euo pipefail -c '
+        source "'"${CCTL_ROOT}"'/lib/colors.sh"
+        source "'"${CCTL_ROOT}"'/lib/log.sh"
+        source "'"${CCTL_ROOT}"'/lib/core.sh"
+        source "'"${CCTL_ROOT}"'/lib/inventory.sh"
+        export CCTL_ROOT="'"${FAKE_CCTL_ROOT}"'"
+        source "'"${CCTL_ROOT}"'/commands/destroy.sh"
+        cmd_destroy < /dev/null
+    '
+    assert_failure
+    assert_output --partial "Operacao cancelada"
+    refute_output --partial "STUB-CLEAR-ALL-CHAMADO"
+    [[ -d "${INSTANCE_DIR}" ]]
 }

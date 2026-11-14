@@ -13,12 +13,12 @@ _clear_all_inventory_network() {
     inventory_clear_network "${project_name}"
 }
 
-# O destroy chama esta funcao dentro de `if !`, o que inibe o errexit aqui
-# dentro: toda falha que deve impedir a exclusao definitiva e agregada em
-# teardown_incomplete, nunca deixada a cargo do `set -e`.
-cmd_clear-all() {
+# Confirmacao interativa do clear-all. Separada da execucao para o destroy,
+# que ja confirmou com o operador, nao perguntar uma segunda vez (pendencia
+# 2026-11-14: com o nome uma unica vez no stdin, a segunda leitura recebia EOF
+# e o destroy reportava teardown incompleto sem ter removido nada).
+_clear_all_confirm() {
     local project_name="${COMPOSE_PROJECT_NAME}"
-    local teardown_incomplete=false
 
     msg_danger "ATENCAO: ESTA OPERACAO REMOVERA TODOS OS DADOS E A INSTALACAO DO PROJETO!"
     echo -e "${YELLOW}Projeto: ${CYAN}${project_name}${RESET}"
@@ -29,14 +29,26 @@ cmd_clear-all() {
     echo "  - Cron jobs do projeto"
     echo ""
 
-    read -rp "Digite exatamente o nome do projeto para confirmar: " confirmation
+    # EOF (stdin fechado) vira resposta vazia: cancela com mensagem em vez de
+    # encerrar calado sob `set -e`.
+    local confirmation=""
+    read -rp "Digite exatamente o nome do projeto para confirmar: " confirmation || confirmation=""
     echo ""
 
-    if [[ "${confirmation}" != "${project_name}" ]]; then
+    if [[ -z "${confirmation}" || "${confirmation}" != "${project_name}" ]]; then
         msg_error "Confirmacao falhou!"
         msg_warn "Operacao cancelada."
         return 1
     fi
+}
+
+# Execucao do teardown, sem confirmacao. O destroy chama esta funcao dentro de
+# `if !`, o que inibe o errexit aqui dentro: toda falha que deve impedir a
+# exclusao definitiva e agregada em teardown_incomplete, nunca deixada a cargo
+# do `set -e`.
+clear_all_run() {
+    local project_name="${COMPOSE_PROJECT_NAME}"
+    local teardown_incomplete=false
 
     # Etapa 1/6: Containers
     msg_step "ETAPA 1/6" "Parando e removendo containers..."
@@ -160,4 +172,9 @@ cmd_clear-all() {
         return 1
     fi
     msg_success "Projeto ${project_name} removido com sucesso!"
+}
+
+cmd_clear-all() {
+    _clear_all_confirm || return 1
+    clear_all_run
 }

@@ -283,6 +283,19 @@ _ssl_issue_manual() {
     nginx_proxy_reload
 }
 
+# Imprime o notAfter do certificado do dominio no host (rc != 0 quando ausente
+# ou ilegivel). Le via _ssl_read_file: live/ e 0700 root.
+_ssl_cert_enddate() {
+    local domain="$1" cert_file enddate=""
+    cert_file=$(_ssl_host_cert_file "${domain}") || return 1
+    core_priv_run test -f "${cert_file}" || return 1
+    if ! enddate=$(_ssl_read_file "${cert_file}" | openssl x509 -enddate -noout 2>/dev/null | cut -d= -f2) \
+        || [[ -z "${enddate}" ]]; then
+        return 1
+    fi
+    printf '%s\n' "${enddate}"
+}
+
 # Le um arquivo respeitando permissoes: cat direto se legivel pelo usuario
 # atual, senao recorre a core_priv_run (sudo) — necessario para comparar
 # chaves privadas 0600 pertencentes a root sem exigir acesso direto a elas.
@@ -349,10 +362,27 @@ ssl_renew() {
             # Renovacao manual (cctl ssl renew), tambem via docker exec — o
             # job periodico (cron dentro da imagem) e responsabilidade da F3;
             # aqui so garantimos que, quando chamado, roda no lugar certo.
+            # O certbot renew atua sobre TODOS os certificados do proxy e
+            # devolve rc 0 tambem quando nenhum estava perto de vencer; a
+            # mensagem compara o notAfter do dominio antes e depois.
             _nginx_proxy_require_container || return 1
+            local before="" after=""
+            before="$(_ssl_cert_enddate "${domain}")" || before=""
             msg_step "SSL" "Renovando certificados Let's Encrypt..."
             if docker exec "${NGINX_CONTAINER_NAME}" certbot renew --quiet; then
-                log_success "Certificados renovados"
+                after="$(_ssl_cert_enddate "${domain}")" || after=""
+                if [[ -z "${after}" ]]; then
+                    log_warn "Renovacao executada; validade nao verificada para ${domain}"
+                elif [[ -z "${before}" ]]; then
+                    # Sem a validade anterior nao ha como afirmar que renovou.
+                    log_success "Renovacao executada (${domain} vence em ${after})"
+                elif [[ "${after}" != "${before}" ]]; then
+                    log_success "Certificado de ${domain} renovado (vence em ${after})"
+                else
+                    # So o dominio consultado e observado: o renew e global e
+                    # pode ter renovado outro certificado do proxy.
+                    log_success "Certificado de ${domain} sem alteracao de validade (vence em ${after}); renovacao dos certificados do proxy executada"
+                fi
                 nginx_proxy_reload
             else
                 log_warn "Falha na renovacao de certificados"

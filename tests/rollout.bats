@@ -184,7 +184,12 @@ _mock_docker_rollout() {
                 # C1 consulta todos os containers, inclusive os parados; o
                 # mock so devolve esse estado quando o argv contem -a.
                 for arg in "$@"; do
-                    [[ "${arg}" == "-a" ]] && { printf "%s\n" ${CONTAINERS_EXIST:-}; exit 0; }
+                    if [[ "${arg}" == "-a" ]]; then
+                        for c in ${CONTAINERS_EXIST:-}; do
+                            grep -qxF "${c}" "'"${WORKDIR}"'/removed_containers" 2>/dev/null || printf "%s\n" "${c}"
+                        done
+                        exit 0
+                    fi
                 done
                 exit 0
                 ;;
@@ -309,6 +314,9 @@ _mock_docker_rollout() {
                 ;;
             rm)
                 [[ "${DOCKER_RM_FAIL:-0}" == "1" ]] && exit 1
+                # Registra o removido: o `ps -a` deixa de lista-lo (o dreno
+                # confere a remocao do slot green).
+                echo "${@: -1}" >> "'"${WORKDIR}"'/removed_containers"
                 exit 0
                 ;;
         esac
@@ -949,6 +957,30 @@ EOF
     grep -q 'LIVE_SLOT="green"' "${ROLLOUT_STATE_FILE}"
 }
 
+@test "bluegreen: a mensagem do dreno diz se o slot anterior foi parado (blue) ou removido (green)" {
+    _write_vhost "moodle-app" "443" "https"
+    _write_state "moodle-app" "blue"
+    run rollout_bluegreen --service moodle-app
+    assert_success
+    assert_output --partial "Slot anterior (blue) drenado: servico do compose parado."
+
+    run rollout_bluegreen --service moodle-app
+    assert_success
+    assert_output --partial "Slot anterior (green) drenado: container avulso removido."
+}
+
+@test "bluegreen: green que continua existindo apos o dreno nao e anunciado como removido" {
+    _write_vhost "moodle-app-green" "443" "https"
+    _write_state "moodle-app" "green"
+    export CONTAINERS_EXIST="nginx-proxy testproj-moodle-app testproj-moodle-app-green"
+    export DOCKER_RM_FAIL=1
+    run rollout_bluegreen --service moodle-app
+    assert_success
+    refute_output --partial "container avulso removido"
+    assert_output --partial "continua existindo"
+    assert_output --partial "Dreno do slot anterior (green) nao concluido"
+}
+
 # =============================================================================
 # 13. rollout status / usage / acao desconhecida
 # =============================================================================
@@ -960,6 +992,44 @@ EOF
     assert_success
     assert_output --partial "Slot live:"
     assert_output --partial "green"
+}
+
+# Pendencia 2026-11-14 (teste de producao): apos um bluegreen sem --image o
+# status mostrava "Imagem: n/a" (o estado so grava a imagem com --image) e
+# "Saude: n/a" para imagem sem HEALTHCHECK do Docker, mesmo com o slot no ar.
+@test "rollout status: sem --image no rollout, mostra a imagem real do container live" {
+    _write_state "moodle-app" "green"
+    export ROLLOUT_SERVICE="moodle-app"
+    export CONTAINERS_EXIST="nginx-proxy testproj-moodle-app testproj-moodle-app-green"
+    export PREV_IMAGE="ghcr.io/acme/moodle:4.5"
+    # O estado registra outra imagem (ex. --image de um rollout interrompido):
+    # a imagem real do container live prevalece.
+    sed -i 's/^IMAGE=.*/IMAGE="ghcr.io\/acme\/moodle:pretendida"/' "${ROLLOUT_STATE_FILE}"
+    run rollout_status
+    assert_success
+    assert_output --regexp "Imagem: +.*ghcr.io/acme/moodle:4.5"
+    refute_output --regexp "Imagem: +.*n/a"
+    refute_output --partial "moodle:pretendida"
+}
+
+@test "rollout status: imagem sem HEALTHCHECK diz isso em vez de n/a" {
+    _write_state "moodle-app" "blue"
+    export ROLLOUT_SERVICE="moodle-app"
+    export CONTAINERS_EXIST="nginx-proxy testproj-moodle-app"
+    run rollout_status
+    assert_success
+    assert_output --partial "sem HEALTHCHECK ativo no container"
+    refute_output --regexp "Saude: +.*n/a"
+}
+
+@test "rollout status: imagem com HEALTHCHECK mostra o estado do Docker" {
+    _write_state "moodle-app" "blue"
+    export ROLLOUT_SERVICE="moodle-app"
+    export CONTAINERS_EXIST="nginx-proxy testproj-moodle-app"
+    export HAS_DOCKER_HEALTHCHECK=1
+    run rollout_status
+    assert_success
+    assert_output --regexp "Saude: +.*healthy"
 }
 
 @test "rollout status: sem arquivo de estado, avisa mas nao falha" {
