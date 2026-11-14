@@ -71,21 +71,33 @@ ssl_get_key_path() {
     esac
 }
 
+# Caminho do fullchain NO HOST (o lado montado em /etc/letsencrypt do
+# container), conforme o modo SSL. ssl_get_cert_path devolve o caminho de
+# DENTRO do container e nao serve para consultar o filesystem do host.
+_ssl_host_cert_file() {
+    local domain="$1"
+    local mode
+    mode=$(_ssl_mode)
+
+    case "${mode}" in
+        none) echo "" ;;
+        letsencrypt) echo "${LETSENCRYPT_LIVE_DIR}/${domain}/fullchain.pem" ;;
+        manual|self-signed) echo "${LETSENCRYPT_DIR}/${domain}/fullchain.pem" ;;
+        *) log_error "SSL_MODE invalido: ${mode}"; return 1 ;;
+    esac
+}
+
 # Verifica se o certificado (fullchain) do modo/dominio atuais ja existe no
-# filesystem. Usa sudo quando o arquivo nao e legivel pelo usuario atual
-# (ex.: /etc/letsencrypt e normalmente 0700 root). SSL_MODE=none nunca "tem"
-# certificado.
+# host. O certbot cria live/ e archive/ 0700 root, entao a consulta passa por
+# core_priv_run test (escala para sudo so quando nao ha travessia).
+# Retorno: 0 presente, 1 ausente (ou SSL_MODE=none), 2 consulta nao executou.
 ssl_cert_exists() {
     local domain="${1:-${DOMAIN_NAME}}"
-    local cert_path
-    cert_path=$(ssl_get_cert_path "${domain}") || return 1
-    [[ -z "${cert_path}" ]] && return 1
+    local cert_file
+    cert_file=$(_ssl_host_cert_file "${domain}") || return 1
+    [[ -z "${cert_file}" ]] && return 1
 
-    if [[ -r "${cert_path}" ]]; then
-        [[ -f "${cert_path}" ]]
-    else
-        sudo test -f "${cert_path}" 2>/dev/null
-    fi
+    core_priv_run test -f "${cert_file}"
 }
 
 # ============================================================
@@ -382,30 +394,29 @@ ssl_status() {
         return 0
     fi
 
-    local cert_file=""
-    case "${mode}" in
-        letsencrypt)
-            cert_file="${LETSENCRYPT_LIVE_DIR}/${domain}/fullchain.pem"
-            ;;
-        manual|self-signed)
-            cert_file="${LETSENCRYPT_DIR}/${domain}/fullchain.pem"
-            ;;
-        *)
-            log_error "SSL_MODE invalido: ${mode}"
-            return 1
-            ;;
-    esac
+    local cert_file exists_rc=0
+    cert_file=$(_ssl_host_cert_file "${domain}") || return 1
 
-    if [[ ! -f "${cert_file}" ]]; then
+    # Distingue ausencia confirmada (1) de consulta que nao executou (2):
+    # live/ e 0700 root, e um -f direto daria falso "nenhum certificado".
+    core_priv_run test -f "${cert_file}" || exists_rc=$?
+    if [[ ${exists_rc} -eq 1 ]]; then
         msg_warn "Nenhum certificado encontrado para ${domain}"
+        return 1
+    elif [[ ${exists_rc} -ne 0 ]]; then
+        log_error "Nao foi possivel consultar o certificado de ${domain} em ${cert_file}"
         return 1
     fi
 
-    local expiry
-    if [[ -r "${cert_file}" ]]; then
-        expiry=$(openssl x509 -enddate -noout -in "${cert_file}" 2>/dev/null | cut -d= -f2)
-    else
-        expiry=$(sudo openssl x509 -enddate -noout -in "${cert_file}" 2>/dev/null | cut -d= -f2)
+    # Leitura privilegiada so do arquivo (core_priv_run cat); o parse roda
+    # sem privilegio.
+    # Atribuicao dentro do `if`: sob `set -euo pipefail` (entry point) a falha
+    # do pipeline sairia calada antes do diagnostico.
+    local expiry=""
+    if ! expiry=$(_ssl_read_file "${cert_file}" | openssl x509 -enddate -noout 2>/dev/null | cut -d= -f2) \
+        || [[ -z "${expiry}" ]]; then
+        log_error "Nao foi possivel ler a validade do certificado ${cert_file}"
+        return 1
     fi
 
     echo -e "  Certificado: ${cert_file}"

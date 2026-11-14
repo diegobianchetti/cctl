@@ -222,10 +222,19 @@ _install_ssl() {
     # ANTES da emissao (desafio webroot). Se o certificado ainda nao existe,
     # sobe temporariamente esse vhost HTTP puro; o vhost final (SSL ou nossl)
     # e aplicado depois por _install_nginx.
-    if [[ "$(_ssl_mode)" == "letsencrypt" ]] && [[ "${HOST_NGINX:-false}" == "true" ]] \
-        && ! ssl_cert_exists "${DOMAIN_NAME}"; then
-        _install_bootstrap_letsencrypt_http_vhost || \
-            log_warn "Falha ao preparar vhost HTTP temporario para o desafio ACME — emissao letsencrypt pode falhar"
+    # So a ausencia CONFIRMADA (rc 1) publica o bootstrap: ele substitui o vhost
+    # HTTPS por um que so atende ACME. Com estado desconhecido (rc >= 2) nao
+    # publica — se o certificado faltar de fato, a emissao falha com aviso e o
+    # nginx -t de _install_nginx barra o vhost final.
+    if [[ "$(_ssl_mode)" == "letsencrypt" ]] && [[ "${HOST_NGINX:-false}" == "true" ]]; then
+        local cert_rc=0
+        ssl_cert_exists "${DOMAIN_NAME}" || cert_rc=$?
+        if [[ ${cert_rc} -eq 1 ]]; then
+            _install_bootstrap_letsencrypt_http_vhost || \
+                log_warn "Falha ao preparar vhost HTTP temporario para o desafio ACME — emissao letsencrypt pode falhar"
+        elif [[ ${cert_rc} -ne 0 ]]; then
+            log_warn "Nao foi possivel confirmar se o certificado de ${DOMAIN_NAME} existe (estado desconhecido) — vhost HTTP temporario do desafio ACME NAO publicado"
+        fi
     fi
 
     ssl_issue "${DOMAIN_NAME}" || log_warn "Falha no SSL. Verifique manualmente."

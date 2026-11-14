@@ -584,6 +584,163 @@ _mock_docker_ssl() {
 }
 
 # ============================================================
+# T7 — consulta de certificado no HOST, privilegio so via core_priv_run
+# ============================================================
+
+# sudo que simula root sobre um diretorio protegido: abre a travessia so
+# durante o comando privilegiado e fecha de novo. Registra a chamada.
+_mock_sudo_root_over() {
+    local protected="$1"
+    mock_cmd sudo '
+        echo "sudo-called: $*" >> "'"${WORKDIR}"'/sudo.log"
+        [[ "$1" == "-n" ]] && shift
+        chmod 755 "'"${protected}"'"
+        "$@"; rc=$?
+        chmod 000 "'"${protected}"'"
+        exit "${rc}"
+    '
+}
+
+_make_le_cert() {
+    mkdir -p "${LETSENCRYPT_LIVE_DIR}/app.example.com"
+    make_test_keypair "${LETSENCRYPT_LIVE_DIR}/app.example.com/fullchain.pem" \
+        "${LETSENCRYPT_LIVE_DIR}/app.example.com/privkey.pem" "app.example.com"
+}
+
+@test "T7: lib/ssl.sh nao tem sudo cru fora de comentario" {
+    # Sentinela, nao parser: `sudo` dentro de string daria falso positivo e
+    # `cmd '#'; sudo x` passaria. rc 1 exato = sem ocorrencia (rc 2 = erro de leitura).
+    run grep -nE '^[^#]*(^|[^_[:alnum:]])sudo[[:space:]]' "${CCTL_ROOT}/lib/ssl.sh"
+    assert_equal "${status}" 1
+}
+
+@test "ssl_cert_exists: letsencrypt acha o certificado no caminho do HOST (LETSENCRYPT_LIVE_DIR)" {
+    export SSL_MODE="letsencrypt"
+    _make_le_cert
+    run ssl_cert_exists "app.example.com"
+    assert_success
+    [[ ! -f sudo.log ]]
+}
+
+@test "ssl_cert_exists: self-signed acha o certificado no caminho do HOST (LETSENCRYPT_DIR)" {
+    export SSL_MODE="self-signed"
+    ssl_issue "app.example.com"
+    run ssl_cert_exists "app.example.com"
+    assert_success
+}
+
+@test "ssl_cert_exists: ausencia confirmada retorna 1 sem escalar para sudo" {
+    export SSL_MODE="letsencrypt"
+    mkdir -p "${LETSENCRYPT_LIVE_DIR}/app.example.com"
+    run ssl_cert_exists "app.example.com"
+    assert_equal "${status}" 1
+    [[ ! -f sudo.log ]]
+}
+
+@test "ssl_cert_exists: consulta que nao executou (sudo negado, live/ protegido) retorna 2" {
+    [[ "${EUID}" -eq 0 ]] && skip "root ignora permissoes de diretorio"
+    export SSL_MODE="letsencrypt"
+    _make_le_cert
+    chmod 000 "${LETSENCRYPT_LIVE_DIR}"
+    mock_sudo_deny
+
+    run ssl_cert_exists "app.example.com"
+    chmod 755 "${LETSENCRYPT_LIVE_DIR}"
+
+    assert_equal "${status}" 2
+}
+
+@test "ssl_cert_exists: manual acha o certificado instalado no caminho do HOST" {
+    export SSL_MODE="manual"
+    mkdir -p "${LETSENCRYPT_DIR}/app.example.com"
+    make_test_keypair "${LETSENCRYPT_DIR}/app.example.com/fullchain.pem" \
+        "${LETSENCRYPT_DIR}/app.example.com/privkey.pem" "app.example.com"
+    run ssl_cert_exists "app.example.com"
+    assert_success
+}
+
+@test "ssl_cert_exists: none nunca tem certificado" {
+    export SSL_MODE="none"
+    run ssl_cert_exists "app.example.com"
+    assert_failure
+}
+
+@test "ssl_cert_exists: live/ sem travessia consulta via core_priv_run (sudo test -f no caminho do host)" {
+    [[ "${EUID}" -eq 0 ]] && skip "root ignora permissoes de diretorio"
+    export SSL_MODE="letsencrypt"
+    _make_le_cert
+    chmod 000 "${LETSENCRYPT_LIVE_DIR}"
+    _mock_sudo_root_over "${LETSENCRYPT_LIVE_DIR}"
+
+    run ssl_cert_exists "app.example.com"
+    chmod 755 "${LETSENCRYPT_LIVE_DIR}"
+
+    assert_success
+    run cat sudo.log
+    assert_output --partial "test -f ${LETSENCRYPT_LIVE_DIR}/app.example.com/fullchain.pem"
+}
+
+@test "ssl_status: letsencrypt com live/ sem travessia reporta expiracao lendo via core_priv_run" {
+    [[ "${EUID}" -eq 0 ]] && skip "root ignora permissoes de diretorio"
+    export SSL_MODE="letsencrypt"
+    _make_le_cert
+    chmod 000 "${LETSENCRYPT_LIVE_DIR}"
+    _mock_sudo_root_over "${LETSENCRYPT_LIVE_DIR}"
+
+    run ssl_status "app.example.com"
+    chmod 755 "${LETSENCRYPT_LIVE_DIR}"
+
+    assert_success
+    assert_output --partial "Expira em"
+    refute_output --partial "Nenhum certificado encontrado"
+    run cat sudo.log
+    assert_output --partial "cat ${LETSENCRYPT_LIVE_DIR}/app.example.com/fullchain.pem"
+    refute_output --partial "openssl"
+}
+
+@test "ssl_status: sudo inoperante com live/ protegido falha sem afirmar ausencia" {
+    [[ "${EUID}" -eq 0 ]] && skip "root ignora permissoes de diretorio"
+    export SSL_MODE="letsencrypt"
+    _make_le_cert
+    chmod 000 "${LETSENCRYPT_LIVE_DIR}"
+    mock_sudo_deny
+
+    run ssl_status "app.example.com"
+    chmod 755 "${LETSENCRYPT_LIVE_DIR}"
+
+    assert_failure
+    refute_output --partial "Nenhum certificado encontrado"
+    assert_output --partial "Nao foi possivel"
+}
+
+# Executa o comando sob `set -euo pipefail`, como o entry point `cctl` faz
+# (bats roda sem errexit e esconderia saida silenciosa no meio da funcao).
+_ssl_run_strict() {
+    local script="${WORKDIR}/_ssl_strict_runner.sh"
+    {
+        echo '#!/usr/bin/env bash'
+        echo 'set -euo pipefail'
+        printf 'CCTL_ROOT=%q\n' "${CCTL_ROOT}"
+        echo 'for _l in colors log core validate nginx vhost ssl; do source "${CCTL_ROOT}/lib/${_l}.sh"; done'
+        echo 'source "${CCTL_ROOT}/commands/ssl.sh"'
+        echo '"$@"'
+    } > "${script}"
+    chmod +x "${script}"
+    run "${script}" "$@"
+}
+
+@test "ssl_status: certificado ilegivel (conteudo invalido) sob errexit falha COM diagnostico, sem 'Expira em'" {
+    export SSL_MODE="letsencrypt"
+    mkdir -p "${LETSENCRYPT_LIVE_DIR}/app.example.com"
+    echo "lixo" > "${LETSENCRYPT_LIVE_DIR}/app.example.com/fullchain.pem"
+
+    _ssl_run_strict cmd_ssl status "app.example.com"
+    assert_failure
+    refute_output --partial "Expira em"
+    assert_output --partial "Nao foi possivel ler a validade"
+}
+
+# ============================================================
 # cmd_ssl (commands/ssl.sh)
 # ============================================================
 

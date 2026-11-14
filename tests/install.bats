@@ -488,6 +488,58 @@ _stub_install_steps_before_preflight() {
     [[ ! -e "${WORKDIR}/issue.log" ]]
 }
 
+# T7 — bootstrap ACME so com ausencia CONFIRMADA (rc 1) do certificado
+_t7_install_ssl_le() {
+    export HOST_SSL=true SSL_MODE=letsencrypt HOST_NGINX=true
+    export DOMAIN_NAME="app.example.com"
+    ssl_issue() { echo "ssl_issue:$1" >> "${WORKDIR}/issue.log"; }
+    _install_bootstrap_letsencrypt_http_vhost() { echo bootstrap >> "${WORKDIR}/bootstrap.log"; }
+}
+
+@test "_install_ssl: letsencrypt com certificado presente (rc 0) nao publica o bootstrap ACME" {
+    _t7_install_ssl_le
+    ssl_cert_exists() { return 0; }
+    run _install_ssl
+    assert_success
+    [[ ! -e "${WORKDIR}/bootstrap.log" ]]
+    [[ -e "${WORKDIR}/issue.log" ]]
+}
+
+@test "_install_ssl: letsencrypt com ausencia confirmada (rc 1) publica o bootstrap ACME" {
+    _t7_install_ssl_le
+    ssl_cert_exists() { return 1; }
+    run _install_ssl
+    assert_success
+    [[ "$(cat "${WORKDIR}/bootstrap.log")" == "bootstrap" ]]
+}
+
+@test "_install_ssl: letsencrypt com consulta que nao executou (rc 2) NAO publica o bootstrap e avisa" {
+    _t7_install_ssl_le
+    ssl_cert_exists() { return 2; }
+    run _install_ssl
+    assert_success
+    [[ ! -e "${WORKDIR}/bootstrap.log" ]]
+    assert_output --partial "estado desconhecido"
+    [[ -e "${WORKDIR}/issue.log" ]]
+}
+
+@test "_install_ssl: letsencrypt com live/ protegido e sudo negado (ssl_cert_exists real) NAO publica o bootstrap" {
+    [[ "${EUID}" -eq 0 ]] && skip "root ignora permissoes de diretorio"
+    _t7_install_ssl_le
+    export LETSENCRYPT_DIR="${WORKDIR}/le" LETSENCRYPT_LIVE_DIR="${WORKDIR}/le/live"
+    mkdir -p "${LETSENCRYPT_LIVE_DIR}/app.example.com"
+    : > "${LETSENCRYPT_LIVE_DIR}/app.example.com/fullchain.pem"
+    chmod 000 "${LETSENCRYPT_LIVE_DIR}"
+    mock_sudo_deny
+
+    run _install_ssl
+    chmod 755 "${LETSENCRYPT_LIVE_DIR}"
+
+    assert_success
+    [[ ! -e "${WORKDIR}/bootstrap.log" ]]
+    assert_output --partial "estado desconhecido"
+}
+
 @test "_install_ssl: HOST_SSL=false nao emite certificado" {
     export HOST_SSL=false SSL_MODE=self-signed HOST_NGINX=false
     export DOMAIN_NAME="app.example.com"
