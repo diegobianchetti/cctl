@@ -4,7 +4,7 @@
 # Ate a F2.2, tres caminhos diferentes escreviam
 # ${NGINX_VHOSTS_DIR}/${COMPOSE_PROJECT_NAME}.conf com garantias distintas
 # (um deles — nginx_enable_site — apagava o vhost em vez de restaurar em
-# falha, ver WORK_LOG). Este modulo e agora o UNICO dono do arquivo: toda
+# falha). Este modulo e agora o UNICO dono do arquivo: toda
 # escrita/remocao do vhost passa por uma das tres funcoes publicas abaixo,
 # que compartilham a mesma garantia via _vhost_apply.
 #

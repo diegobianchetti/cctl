@@ -32,7 +32,7 @@ _backup_generic() {
 
     # 1. Dump do banco de dados (se DB_SERVICE definido) — falha aqui e
     # fatal para o backup como um todo: um "backup ok" que na verdade nao
-    # gravou o banco e pior que um erro visivel (ver WORK_LOG).
+    # gravou o banco e pior que um erro visivel.
     if [[ -n "${DB_SERVICE:-}" ]]; then
         if ! _backup_database "${backup_dir}" "${backup_name}"; then
             log_error "Backup abortado: falha no dump do banco de dados."
@@ -59,7 +59,7 @@ _backup_generic() {
 # Resolve o alvo pelo compose (compose_exec, lib/compose.sh) em vez de
 # montar o nome do container a mao: "${COMPOSE_PROJECT_NAME}-${DB_SERVICE}-1"
 # nao bate com o nome real quando o compose v2 nao sufixa "-1" (ou quando o
-# template fixa "container_name:") — ver WORK_LOG. "-T" desabilita o
+# template fixa "container_name:"). "-T" desabilita o
 # pseudo-tty, necessario porque a saida do exec vai para um pipe.
 #
 # Usuario do banco: DB_USER (project.conf) com fallback POSTGRES_USER e

@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # tests/templates.bats — asserções estáticas sobre os templates (sem Docker
 # real: só grep/estrutura de arquivo). Cobre a decisão de nao publicar o
-# banco no host por padrao (ver WORK_LOG/CLAUDE.md do projeto).
+# banco no host por padrao.
 
 setup() {
     load 'helpers/common'
