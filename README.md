@@ -272,7 +272,7 @@ RW em `/etc/letsencrypt` no container) e sobe o container `nginx-proxy` a
 partir de `NGINX_PROXY_IMAGE` (default
 `ghcr.io/diegobianchetti/nginx-proxy:latest`). O webroot do certbot
 (`/var/www/certbot`) é interno ao container, sem mount de host; a imagem
-`nginx-proxy` o traz a partir da `v1.0.4`, junto com o job diário de renovação.
+`nginx-proxy` o traz a partir da `1.0.4`, junto com o job diário de renovação.
 
 Valide o catch-all antes de seguir — `curl http://localhost` deve fechar a conexão
 sem resposta (`return 444`), sinal de que o proxy está de pé e sem vhosts ainda.
