@@ -35,7 +35,7 @@ embutido no README).
 
 - Docker Engine 24+
 - Docker Compose (plugin V2)
-- Bash 5.x
+- Bash >= 4.4
 - **`sudo`** — requisito, não opcional: o `cctl` roda como usuário comum,
   mas exige permissão de sudo (raiz de dados na primeira vez, escrita em
   `LETSENCRYPT_DIR` — que fica root-owned de propósito — e arquivos fixos de
@@ -44,8 +44,11 @@ embutido no README).
   (sem terminal — automação, CI — é preciso sudo sem senha, NOPASSWD, de verdade: a senha em cache expira).
   **`certbot` não precisa estar instalado
   no host** — roda dentro do container `nginx-proxy` (`docker exec`).
-- [nginx-proxy](https://github.com/diegobianchetti/nginx-proxy) em execução
-  (necessário para `cctl install`)
+- Usuário no grupo **`docker`** (o `cctl` chama o Docker sem `sudo`)
+- Proxy compartilhado de pé via **`cctl proxy up`** antes do `cctl install`. A
+  imagem vem de `NGINX_PROXY_IMAGE` (default: a do repositório
+  [nginx-proxy](https://github.com/diegobianchetti/nginx-proxy)); não suba o
+  proxy por outro compose.
 
 ### Rede das instalações
 
@@ -268,8 +271,8 @@ Isso cria a rede Docker compartilhada (`PROXY_NETWORK`, default
 RW em `/etc/letsencrypt` no container) e sobe o container `nginx-proxy` a
 partir de `NGINX_PROXY_IMAGE` (default
 `ghcr.io/diegobianchetti/nginx-proxy:latest`). O webroot do certbot
-(`/var/www/certbot`) é interno ao container — não tem mount de host — e é uma
-dependência da imagem `nginx-proxy` (frente F3), que precisa criá-lo.
+(`/var/www/certbot`) é interno ao container, sem mount de host; a imagem
+`nginx-proxy` o traz a partir da `v1.0.4`, junto com o job diário de renovação.
 
 Valide o catch-all antes de seguir — `curl http://localhost` deve fechar a conexão
 sem resposta (`return 444`), sinal de que o proxy está de pé e sem vhosts ainda.
@@ -284,10 +287,11 @@ cctl init moodle moodle-acme
 
 Responda aos prompts: opção `1` cria no diretório atual, e informe um domínio.
 
-> **Importante para ambiente de lab/teste:** o domínio precisa terminar em `.local`
-> ou `.test` (ex.: `moodle-acme.local`) — `cctl install` valida resolução de DNS do
-> domínio informado e domínios sem DNS real (incluindo os exemplos fictícios
-> `*.example.br` usados no resto desta documentação) falham nessa checagem.
+> **Importante para ambiente de lab/teste:** o `cctl install` confere o DNS do
+> domínio. Só em `SSL_MODE=letsencrypt` um domínio sem DNS público é erro fatal;
+> nos outros modos (`self-signed`, `manual`, `none`) vira aviso e a instalação
+> segue. Domínios locais (`localhost`, `*.local`, `*.test`) são recusados com
+> `letsencrypt` e aceitos nos demais modos.
 
 ```bash
 cd moodle-acme

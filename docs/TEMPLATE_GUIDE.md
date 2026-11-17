@@ -386,7 +386,7 @@ cada `Dockerfile` espera do contexto. O diretório base é configurável via
 ### 1. Crie o diretório
 
 ```bash
-cd ~/oogway/cctl
+cd cctl
 mkdir -p templates/gitlab/docker
 mkdir -p templates/gitlab/nginx
 mkdir -p templates/gitlab/cron
@@ -481,7 +481,7 @@ volumes:
 ### 6. Teste
 
 ```bash
-./cctl init gitlab meu-gitlab --domain gitlab.oogway.com.br --dest /tmp/meu-gitlab
+./cctl init gitlab meu-gitlab --domain gitlab.acme.example.br --dest /tmp/meu-gitlab
 ls /tmp/meu-gitlab/
 cat /tmp/meu-gitlab/docker/.env
 ```

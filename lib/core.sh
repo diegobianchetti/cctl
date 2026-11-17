@@ -3,7 +3,7 @@
 # shellcheck disable=SC2034  # variáveis globais exportadas para uso via source em commands/ e lib/
 
 # Versao do cctl
-CCTL_VERSION="0.1.0"
+CCTL_VERSION="1.0.0"
 
 # core_priv_run — executa rm/cp/install/mkdir/cat/test/ls/mv com sudo somente
 # quando necessario.

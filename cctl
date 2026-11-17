@@ -5,7 +5,7 @@
 #- Orquestrador generico para ambientes Docker containerizados          #
 #-                                                                      #
 #-    script          cctl                                              #
-#-    version         0.1.0                                             #
+#-    version         1.0.0                                             #
 #-    author          Diego Bianchetti (diego@oogway.com.br)            #
 #-    license         GNU General Public License v3                     #
 #-                                                                      #

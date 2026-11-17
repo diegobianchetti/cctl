@@ -33,6 +33,9 @@ servidor público com Let's Encrypt real.
   mesmo site). `SUBNET_RANGE` saiu dos templates.
 - **`MOODLE_SSL` saiu do núcleo.** O TLS na borda depende só de `HOST_SSL` e
   `SSL_MODE`; `MOODLE_SSL` passa a ser assunto do template `moodle`.
+- **Template `dspace` só para dev/teste.** Passou a vir em HTTP
+  (`HOST_SSL=false`, `SSL_MODE="none"`), sem backup de banco agendado no cron e
+  sem as customizações de Solr e do `dspace-angular` que a 0.1.0 trazia.
 - **Falhas tardias param o `install`.** Falha ao instalar o cron em
   `/etc/cron.d`, no logrotate ou no hook `post-install` interrompe a
   instalação; o fallback para a crontab do usuário foi removido.
@@ -49,20 +52,19 @@ servidor público com Let's Encrypt real.
   com healthcheck (`docker`, `http` ou `auto`), troca de tráfego só depois do
   healthcheck, restauração do vhost se o `nginx -t` falhar e rollback
   automático no `rolling`.
-- `cctl build` com `--tag`, `--custom`, `--no-cache`, `--pull` e
-  `--push [--registry]`; o token do registry é lido do ambiente e nunca passa
-  por argumento nem por log.
 - `cctl paths`: mostra a raiz em uso, cada caminho derivado ou fixo e se
   existe e é gravável.
-- `cctl list` e inventário de instâncias: `init` e `install` registram cada
-  instância, com estado `prepared`, `installed` ou `stale`.
-- `cctl destroy`: remove a instância depois de uma única confirmação; EOF ou
-  resposta vazia cancelam.
-- Autocomplete Bash (`cctl-completion.bash`) para todos os subcomandos.
+- Inventário de instâncias: `init` e `install` registram cada instância, e o
+  `cctl list` mostra o estado `prepared`, `installed` ou `stale`.
 - Suíte de testes Bats (`tests/run_tests.sh`) com mocks de Docker, sem
   containers nem portas reais.
 
 ### Alterado
+- `cctl build` ganhou `--tag`, `--custom`, `--no-cache`, `--pull` e
+  `--push [--registry]`; o token do registry é lido do ambiente e nunca passa
+  por argumento nem por log.
+- `cctl destroy` pede uma única confirmação; EOF ou resposta vazia cancelam.
+- Autocomplete Bash (`cctl-completion.bash`) cobre todos os subcomandos.
 - Um único módulo escreve os vhosts (`lib/vhost.sh`), sempre na mesma ordem:
   backup, aplicação, `nginx -t` no container e reversão em caso de falha. O
   `install` deixou de apagar o vhost quando o teste falha.
@@ -109,12 +111,13 @@ servidor público com Let's Encrypt real.
   formato gerado pelos templates.
 - `COMPOSE_FILES` com espaços no caminho não é suportado.
 
-## [0.1.0] - 2026-04-01
+## [0.1.0] - 2026-06-03
 
 ### Adicionado
 - Versão inicial do orquestrador `cctl` em Bash puro.
 - Suporte a templates de deploy (Moodle, DSpace).
 - Subcomandos de lifecycle (`init`, `install`, `up`, `down`, `start`, `stop`, `restart`, `status`, `ps`, `logs`, `config`).
+- Subcomandos de operação (`build`, `backup`, `volumes`, `connect`, `update`, `list`, `destroy`, `clear-all`) e autocomplete Bash.
 - Gerenciamento de rede Docker, volumes e credenciais geradas localmente.
 - Integração com proxy reverso compartilhado e suporte a SSL (`letsencrypt`, `manual`).
 

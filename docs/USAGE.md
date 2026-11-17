@@ -38,6 +38,8 @@ Unifica o gerenciamento de projetos DSpace e Moodle.
   senha uma vez. Sem terminal (automação, CI) o usuário precisa de sudo sem
   senha (NOPASSWD) de verdade: não basta o sudo ter funcionado há pouco, porque
   a credencial em cache expira.
+- Usuário no grupo **`docker`**: o `cctl` chama o Docker sem `sudo`, e o
+  pre-flight do `install` para se `docker info` falhar.
 - Acesso ao registry configurado em `DOCKER_OWNER` para pull das imagens
 
 ### Layout no host
